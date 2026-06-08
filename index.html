@@ -1,0 +1,1962 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UNI IDE · ESP32 Dev Module</title>
+<link rel="icon" type="image/png" href="/icon.png" />
+<link rel="shortcut icon" href="/favicon.ico" />
+
+<link rel="stylesheet" href="/vendor/codemirror/codemirror.min.css" />
+<link rel="stylesheet" href="/vendor/codemirror/theme/dracula.min.css" />
+<link rel="stylesheet" href="/vendor/codemirror/theme/monokai.min.css" />
+<link rel="stylesheet" href="/vendor/codemirror/theme/material-darker.min.css" />
+<link rel="stylesheet" href="/vendor/codemirror/theme/nord.min.css" />
+<link rel="stylesheet" href="/vendor/codemirror/addon/hint/show-hint.min.css" />
+<link rel="stylesheet" href="/vendor/fonts/fonts.css" />
+
+<style>
+  :root {
+    /* --- Arduino IDE palette --- */
+    --bg:        #f5f5f5;
+    --panel:     #00878a;   /* Arduino teal */
+    --panel-2:   #ffffff;
+    --panel-3:   #e8e8e8;   /* editor gutter / side bg */
+    --line:      #c8c8c8;
+    --line-soft: #d8d8d8;
+    --text:      #1a1a1a;
+    --text-hdr:  #ffffff;
+    --muted:     #757575;
+    --accent:    #00878a;
+    --accent-dim:#005f61;
+    --accent-lt: #62aeb2;
+    --ok:        #007700;
+    --err:       #cc2929;
+    --console-bg:#1b2229;
+    --console-fg:#d4d4d4;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ---------- header ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+    height: 56px;
+    background: var(--panel);
+    border-bottom: 2px solid var(--accent-dim);
+    flex-shrink: 0;
+    z-index: 5;
+    overflow: visible;
+  }
+  .brand {
+    font-family: var(--sans);
+    font-weight: 800;
+    letter-spacing: 0px;
+    font-size: 20px;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-transform: uppercase;
+  }
+  .brand svg { flex-shrink: 0; }
+  .brand .brand-ide {
+    color: var(--accent);
+    font-weight: 800;
+    background: #ffffff;
+    border-radius: 5px;
+    padding: 1px 7px;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+    line-height: 1.6;
+  }
+
+  .device-badge {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    padding: 5px 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.22);
+    background: rgba(0,0,0,0.12);
+    color: rgba(255,255,255,0.5);
+    user-select: none;
+    transition: color .18s, background .18s, border-color .18s;
+  }
+  .device-badge .dev-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: rgba(255,255,255,0.4);
+    transition: background .18s, box-shadow .18s;
+  }
+  .device-badge.connected {
+    color: var(--accent);
+    background: #ffffff;
+    border-color: #ffffff;
+  }
+  .device-badge.connected .dev-dot {
+    background: var(--ok);
+    box-shadow: 0 0 6px var(--ok);
+  }
+
+  .spacer { flex: 1; }
+
+  /* ---------- controls ---------- */
+  select, .btn {
+    font-family: var(--sans);
+    font-size: 12.5px;
+    height: 32px;
+    border-radius: 16px;
+    border: none;
+    background: rgba(255,255,255,0.18);
+    color: #ffffff;
+    padding: 0 13px;
+    cursor: pointer;
+    transition: background .12s;
+    outline: none;
+    white-space: nowrap;
+  }
+  select { min-width: 120px; background: rgba(0,0,0,0.18); }
+  select option { background: #fff; color: var(--text); }
+  select:hover, .btn:hover { background: rgba(255,255,255,0.28); }
+  .btn:active { transform: translateY(1px); }
+  .btn.icon { padding: 0 10px; border-radius: 50%; width: 32px; }
+
+  .btn.primary {
+    background: #ffffff;
+    color: var(--accent);
+    font-weight: 700;
+    border-radius: 18px;
+  }
+  .btn.primary:hover { background: #e8f7f7; }
+  .btn.ghost { background: rgba(255,255,255,0.15); }
+  .btn.active { background: rgba(255,255,255,0.35); font-weight: 600; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* ---------- main split ---------- */
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 420px;
+    grid-template-rows: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .editor-wrap {
+    position: relative;
+    border-right: 1px solid var(--line);
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .file-tab {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    padding: 0 0 0 4px;
+    background: var(--panel-3);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: flex-end;
+    gap: 0;
+    height: 34px;
+  }
+  .file-tab .ino {
+    color: var(--text);
+    background: #ffffff;
+    border: 1px solid var(--line);
+    border-bottom: none;
+    border-radius: 4px 4px 0 0;
+    padding: 6px 16px;
+    font-size: 12.5px;
+  }
+  /* ---------- editor toolbar ---------- */
+  .editor-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 12px;
+    background: var(--panel-3);
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  .editor-toolbar label {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .editor-toolbar select {
+    font-family: var(--sans);
+    font-size: 12px;
+    height: 26px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--text);
+    padding: 0 8px;
+    cursor: pointer;
+    outline: none;
+  }
+  .editor-toolbar select:focus { border-color: var(--accent); }
+  .font-size-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: #fff;
+    overflow: hidden;
+  }
+  .font-size-ctrl button {
+    border: none;
+    background: transparent;
+    width: 24px;
+    height: 26px;
+    font-size: 15px;
+    cursor: pointer;
+    color: var(--text);
+    line-height: 1;
+    padding: 0;
+  }
+  .font-size-ctrl button:hover { background: var(--panel-3); }
+  .font-size-ctrl span {
+    font-family: var(--mono);
+    font-size: 12px;
+    min-width: 30px;
+    text-align: center;
+    color: var(--text);
+    user-select: none;
+  }
+  .toolbar-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--line);
+  }
+  .toolbar-spacer { flex: 1; min-width: 12px; }
+  /* ---------- editor search box ---------- */
+  .editor-search {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    height: 26px;
+    padding: 0 3px 0 7px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: #fff;
+    transition: border-color .12s;
+  }
+  .editor-search.active { border-color: var(--accent); }
+  .editor-search .search-ico {
+    width: 13px; height: 13px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .editor-search input {
+    border: none;
+    outline: none;
+    background: transparent;
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--text);
+    width: 150px;
+    padding: 0 2px;
+  }
+  .editor-search input::placeholder { color: var(--muted); }
+  .search-count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    min-width: 32px;
+    text-align: right;
+    white-space: nowrap;
+    user-select: none;
+  }
+  .search-count.nomatch { color: var(--err); }
+  .search-nav {
+    border: none;
+    background: transparent;
+    width: 20px; height: 22px;
+    border-radius: 3px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1;
+    padding: 0;
+  }
+  .search-nav:hover { background: var(--panel-3); color: var(--text); }
+  /* selected-word occurrences */
+  .cm-matchhighlight { background: rgba(90, 200, 205, 0.30); border-radius: 2px; }
+  /* search matches */
+  .cm-searchmatch { background: rgba(255, 193, 7, 0.40); border-radius: 2px; }
+  .cm-searchmatch-current { background: #ff9800; color: #1a1a1a !important; border-radius: 2px; }
+
+  .CodeMirror {
+    height: 100%;
+    flex: 1;
+    min-height: 0;
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 1.6;
+    background: #ffffff;
+    color: #1a1a1a;
+  }
+  .CodeMirror-gutters { background: #f0f0f0; border-right: 1px solid #d8d8d8; }
+  .CodeMirror-linenumber { color: #9a9a9a; }
+  .cm-s-default .CodeMirror-cursor { border-left: 2px solid var(--accent); }
+  .CodeMirror-selected { background: #c9e8e9 !important; }
+  /* Autocomplete dropdown (show-hint addon) */
+  .CodeMirror-hints {
+    position: absolute; z-index: 60;
+    overflow-y: auto; overflow-x: hidden;
+    list-style: none; margin: 4px 0; padding: 4px;
+    max-height: 260px; min-width: 190px;
+    font-family: var(--mono); font-size: 12.5px;
+    background: #ffffff; color: #2b2b2b;
+    border: 1px solid rgba(0,0,0,0.12); border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.22);
+  }
+  .CodeMirror-hint {
+    margin: 0; padding: 5px 10px; border-radius: 6px;
+    white-space: pre; cursor: pointer; color: #2b2b2b;
+  }
+  li.CodeMirror-hint-active { background: var(--accent); color: #ffffff; }
+  /* Arduino-style syntax colours */
+  .cm-keyword   { color: #00878a; font-weight: bold; }
+  .cm-def       { color: #d35400; }
+  .cm-variable  { color: #1a1a1a; }
+  .cm-number    { color: #4169e1; }
+  .cm-string    { color: #7d2727; }
+  .cm-comment   { color: #95a5a6; font-style: italic; }
+  .cm-builtin   { color: #00878a; }
+
+  /* ---------- side panel ---------- */
+  .side {
+    display: flex;
+    flex-direction: column;
+    background: var(--console-bg);
+    min-width: 0;
+    overflow: hidden;
+  }
+  .tabs {
+    display: flex;
+    background: var(--panel-3);
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  .tab {
+    font-family: var(--sans);
+    font-size: 12.5px;
+    padding: 10px 16px;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    user-select: none;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+  /* контейнер для всех панелей — заполняет оставшееся место */
+  .panes-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* каждая панель — абсолютно заполняет panes-wrap */
+  .pane {
+    display: none;
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+  }
+  .pane.active { display: block; }
+
+  /* ---- toolbar консоли ---- */
+  .log-toolbar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    padding: 0 8px;
+    background: #141920;
+    border-bottom: 1px solid #2a3040;
+    z-index: 2;
+  }
+  .log-toolbar button {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid #2a3040;
+    color: #8892a0;
+    border-radius: 4px;
+    padding: 2px 8px;
+    cursor: pointer;
+    transition: color .12s, border-color .12s;
+  }
+  .log-toolbar button:hover { color: #d4d4d4; border-color: #4a5568; }
+  .log-toolbar .copied { color: #6dbf67 !important; border-color: #6dbf67 !important; }
+
+  /* ---- кнопка прокрутки вниз ---- */
+  .log-scroll-btn {
+    position: absolute;
+    bottom: 10px;
+    right: 14px;
+    background: #2a3040;
+    border: 1px solid #4a5568;
+    color: #d4d4d4;
+    border-radius: 50%;
+    width: 28px; height: 28px;
+    font-size: 14px;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    opacity: 0.85;
+  }
+  .log-scroll-btn.visible { display: flex; }
+  .log-scroll-btn:hover { opacity: 1; }
+
+  /* ---- лог — абсолютно заполняет отведённую зону ---- */
+  .log {
+    position: absolute;
+    overflow-y: auto;
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--console-bg);
+    color: var(--console-fg);
+    user-select: text;
+    cursor: text;
+  }
+  .log .ok  { color: #6dbf67; }
+  .log .err { color: #f06060; }
+  .log .sys { color: #62aeb2; }
+  .log .rx  { color: #a8d8a8; }
+
+  /* консоль: лог от toolbar до низа */
+  .pane[data-pane="console"] .log {
+    top: 30px; left: 0; right: 0; bottom: 0;
+  }
+
+  /* serial: бар 46px, инпут 48px, лог в середине */
+  .pane[data-pane="serial"] .serial-bar {
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 46px;
+    z-index: 2;
+  }
+  .pane[data-pane="serial"] .log {
+    top: 46px; left: 0; right: 0; bottom: 48px;
+  }
+  .pane[data-pane="serial"] .serial-input {
+    position: absolute;
+    bottom: 0; left: 0; right: 0; height: 48px;
+  }
+
+  /* docs: верхняя панель 38px + iframe на всё остальное */
+  .pane[data-pane="docs"] .docs-bar {
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 38px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; padding: 0 10px;
+    background: var(--panel-3);
+    border-bottom: 1px solid var(--line);
+    z-index: 2;
+  }
+  .pane[data-pane="docs"] .docs-title {
+    font-size: 12.5px; font-weight: 600; color: var(--text);
+  }
+  .pane[data-pane="docs"] .docs-bar .btn {
+    background: #fff; color: var(--accent);
+    border: 1px solid var(--line); border-radius: 4px;
+    height: 28px; font-size: 12px; padding: 0 10px;
+  }
+  .pane[data-pane="docs"] .docs-bar .btn:hover { background: #eaf6f6; }
+  .docs-frame {
+    position: absolute;
+    top: 38px; left: 0; right: 0;
+    width: 100%; height: calc(100% - 38px);
+    border: 0; background: #fff;
+    display: block;
+  }
+
+  .serial-input {
+    display: flex;
+    gap: 6px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--line);
+    background: var(--panel-3);
+    align-items: center;
+  }
+  .serial-input input {
+    flex: 1;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: #ffffff;
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 0 10px;
+    height: 30px;
+    outline: none;
+  }
+  .serial-input input:focus { border-color: var(--accent); }
+  .serial-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 10px;
+    background: var(--panel-3);
+    border-bottom: 1px solid var(--line);
+  }
+  .serial-bar select, .serial-bar .btn {
+    background: #ffffff;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    height: 30px;
+    font-size: 12.5px;
+    padding: 0 10px;
+  }
+  .serial-bar .btn:hover { background: var(--panel-3); }
+  .serial-bar .btn.active { color: var(--accent); border-color: var(--accent); }
+
+  /* libraries */
+  .lib-pane { padding: 12px; gap: 10px; overflow: auto; background: #fff; }
+  .lib-search { display: flex; gap: 8px; }
+  .lib-search input {
+    flex: 1;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: #ffffff;
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 0 10px;
+    height: 32px;
+    outline: none;
+  }
+  .lib-search input:focus { border-color: var(--accent); }
+  .lib-search .btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    height: 32px;
+    padding: 0 14px;
+  }
+  .lib-search .btn:hover { background: var(--accent-dim); }
+  .lib-section-title {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: var(--muted);
+    margin: 14px 0 6px;
+  }
+  .lib-item {
+    border: 1px solid var(--line);
+    background: #fafafa;
+    border-radius: 4px;
+    padding: 9px 11px;
+    margin-bottom: 6px;
+  }
+  .lib-item .name { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+  .lib-item .name span { color: var(--muted); font-weight: 400; }
+  .lib-item .desc { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .lib-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .lib-ac {
+    display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+    font-family: var(--sans); font-size: 10.5px; color: var(--muted);
+    user-select: none; white-space: nowrap; flex-shrink: 0;
+  }
+  .lib-ac input { accent-color: var(--accent); cursor: pointer; margin: 0; }
+  .lib-ac:hover { color: var(--accent-dim); }
+  .lib-item .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .mini-btn {
+    font-family: var(--sans); font-size: 11.5px; font-weight: 600;
+    border: none; color: #fff;
+    background: var(--accent); border-radius: 4px;
+    padding: 4px 10px; cursor: pointer; white-space: nowrap;
+  }
+  .mini-btn:hover { background: var(--accent-dim); }
+
+  /* enriched installed-library cards */
+  .lib-item .meta {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    margin-top: 5px; font-size: 11px; color: var(--muted);
+  }
+  .lib-chip {
+    font-family: var(--mono); font-size: 10.5px;
+    background: var(--panel-3); color: var(--accent-dim);
+    border-radius: 3px; padding: 1px 6px;
+  }
+  .lib-loc {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+    background: #eaf6f6; color: var(--accent-dim);
+    border-radius: 3px; padding: 1px 6px;
+  }
+  .lib-item a.lib-web { color: var(--accent); text-decoration: none; font-size: 11px; }
+  .lib-item a.lib-web:hover { text-decoration: underline; }
+  .lib-installed-head { display: flex; align-items: center; gap: 8px; }
+  .lib-count { font-size: 11px; color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .lib-filter {
+    width: 100%; height: 30px; margin: 4px 0 8px;
+    font-family: var(--mono); font-size: 12px;
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 0 10px; outline: none;
+  }
+  .lib-filter:focus { border-color: var(--accent); }
+
+  /* ---------- File menu ---------- */
+  .menu { position: relative; }
+  .menu-btn {
+    font-family: var(--sans); font-size: 13px; font-weight: 600;
+    height: 32px; border: none; border-radius: 6px;
+    background: rgba(255,255,255,0.16); color: #fff;
+    padding: 0 12px; cursor: pointer;
+  }
+  .menu-btn:hover, .menu-btn.open { background: rgba(255,255,255,0.30); }
+  .menu-list {
+    position: absolute; top: 38px; left: 0;
+    min-width: 220px;
+    background: #fff; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    padding: 5px; z-index: 50; display: none;
+  }
+  .menu-list.open { display: block; }
+  .menu-item {
+    font-size: 13px; padding: 8px 12px; border-radius: 4px;
+    cursor: pointer; white-space: nowrap; color: var(--text);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .menu-item:hover { background: var(--panel-3); color: var(--accent); }
+  .menu-item .hint { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .menu-sep { height: 1px; background: var(--line); margin: 5px 4px; }
+  .menu-label {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--muted); padding: 4px 12px 2px; user-select: none;
+  }
+  .recent-list { max-height: 240px; overflow-y: auto; }
+  .recent-item {
+    font-size: 12.5px; padding: 6px 12px; border-radius: 4px;
+    cursor: pointer; color: var(--text);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .recent-item:hover { background: var(--panel-3); }
+  .recent-item .r-name { font-weight: 600; }
+  .recent-item .r-path {
+    font-family: var(--mono); font-size: 10px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 300px; direction: rtl; text-align: left;
+  }
+  .recent-item.cur .r-name { color: var(--accent); }
+  .recent-item.cur .r-name::after { content: " •"; color: var(--accent); }
+  .recent-item.missing { opacity: 0.45; cursor: default; }
+  .recent-item.missing:hover { background: transparent; }
+  .recent-empty { font-size: 12px; color: var(--muted); padding: 6px 12px; font-style: italic; }
+
+  /* ---------- modal ---------- */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: none; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: #fff; color: var(--text);
+    border-radius: 10px;
+    width: 460px; max-width: 92vw; max-height: 82vh;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.3);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal h3 {
+    margin: 0; padding: 15px 18px;
+    font-size: 15px; font-weight: 600;
+    background: var(--panel); color: #fff;
+  }
+  .modal-body { padding: 16px 18px; overflow-y: auto; }
+  .modal-body input[type=text] {
+    width: 100%; height: 36px;
+    font-family: var(--mono); font-size: 13px;
+    border: 1px solid var(--line); border-radius: 5px;
+    padding: 0 10px; outline: none;
+  }
+  .modal-body input[type=text]:focus { border-color: var(--accent); }
+  .modal-err { color: var(--err); font-size: 12px; margin-top: 8px; min-height: 14px; }
+  .modal-actions {
+    display: flex; justify-content: flex-end; gap: 8px;
+    padding: 12px 18px; border-top: 1px solid var(--line);
+  }
+  .modal-actions .btn {
+    height: 34px; border-radius: 6px;
+    background: var(--panel-3); color: var(--text);
+  }
+  .modal-actions .btn:hover { background: var(--line); }
+  .modal-actions .btn.primary { background: var(--accent); color: #fff; }
+  .modal-actions .btn.primary:hover { background: var(--accent-dim); }
+  .sketch-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; padding: 9px 11px;
+    border: 1px solid var(--line); border-radius: 6px;
+    margin-bottom: 7px; cursor: pointer;
+  }
+  .sketch-row:hover { border-color: var(--accent); background: #f3fbfb; }
+  .sketch-row.current { border-color: var(--accent); background: #eaf6f6; }
+  .sketch-row .sk-name { font-family: var(--mono); font-size: 13px; }
+  .sketch-row .sk-name b { color: var(--accent); }
+  .sketch-row .sk-open-win {
+    font-size: 11.5px; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 3px 9px; background: #fff; cursor: pointer; white-space: nowrap;
+  }
+  .sketch-row .sk-open-win:hover { color: var(--accent); border-color: var(--accent); }
+  .modal-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 18px; }
+
+  /* ---------- status bar ---------- */
+  .status {
+    height: 26px;
+    flex-shrink: 0;
+    background: var(--panel-3);
+    border-top: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .status .seg { display: flex; align-items: center; gap: 6px; }
+  .status .led { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .status .led.on  { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
+  .status .led.off { background: var(--err); }
+  #stMsg { margin-left: auto; color: var(--accent); font-weight: 600; }
+
+  .spin {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #ffffff;
+    animation: sp .7s linear infinite; display: none;
+  }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  .working .spin { display: inline-block; }
+
+  /* ---------- progress bar ---------- */
+  #progressWrap {
+    height: 4px;
+    background: #d0eeee;
+    flex-shrink: 0;
+    display: none;
+    position: relative;
+    overflow: hidden;
+  }
+  #progressWrap.active { display: block; }
+  #progressBar {
+    height: 100%;
+    background: var(--accent);
+    width: 0%;
+    transition: width .3s ease;
+  }
+  #progressWrap.indeterminate #progressBar {
+    width: 35% !important;
+    position: absolute;
+    animation: indeterminate 1.2s ease-in-out infinite;
+  }
+  @keyframes indeterminate {
+    0%   { left: -35%; }
+    100% { left: 100%; }
+  }
+  #progressStage {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    padding: 0 14px;
+    height: 20px;
+    align-items: center;
+    background: #eaf6f6;
+    border-bottom: 1px solid #c5e8e8;
+    flex-shrink: 0;
+    display: none;
+  }
+  #progressStage.active { display: flex; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #c0c0c0; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <svg width="32" height="38" viewBox="0 0 168 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M65.0275 93.6581L54.9206 82.2931C54.1615 81.4395 53.0738 80.9512 51.9316 80.9512H51C48.7909 80.9512 47 79.1604 47 76.9512V75C47 72.7909 48.7909 71 51 71H117C119.209 71 121 72.7909 121 75V76.9512C121 79.1604 119.209 80.9512 117 80.9512H116.068C114.926 80.9512 113.838 81.4395 113.079 82.2931L102.973 93.6581C102.213 94.5117 101.126 95 99.9835 95H68.0165C66.8743 95 65.7865 94.5117 65.0275 93.6581Z" fill="white"/>
+      <path d="M47.4365 96H40C38.3431 96 37 97.3431 37 99V115.896C37 117.39 38.099 118.656 39.5779 118.866L54.5926 121H114.407L129.422 118.866C130.901 118.656 132 117.39 132 115.896V99C132 97.3431 130.657 96 129 96H121.015C120.168 96 119.361 96.3579 118.792 96.9853L107.091 109.896C106.522 110.523 105.715 110.881 104.868 110.881H64.0944C63.2697 110.881 62.4814 110.541 61.9148 109.942L49.6161 96.9386C49.0494 96.3395 48.2612 96 47.4365 96Z" fill="white"/>
+      <path d="M132 172C132 174.209 130.209 176 128 176H41C38.7909 176 37 174.209 37 172V115C37 112.791 38.7909 111 41 111H128C130.209 111 132 112.791 132 115V172ZM58 128C55.7909 128 54 129.791 54 132V154C54 156.209 55.7909 158 58 158H111C113.209 158 115 156.209 115 154V132C115 129.791 113.209 128 111 128H58Z" fill="white"/>
+      <path d="M128 24C130.209 24 132 25.7909 132 28V77C132 79.2091 130.209 81 128 81H41C38.7909 81 37 79.2091 37 77V28C37 25.7909 38.7909 24 41 24H128ZM58 38C55.7909 38 54 39.7909 54 42V64C54 66.2091 55.7909 68 58 68H111C113.209 68 115 66.2091 115 64V42C115 39.7909 113.209 38 111 38H58Z" fill="white"/>
+    </svg>
+    UNI <span class="brand-ide">IDE</span>
+  </div>
+
+  <div class="menu" id="fileMenu">
+    <button class="menu-btn" id="fileMenuBtn">Файл ▾</button>
+    <div class="menu-list" id="fileMenuList">
+      <div class="menu-item" data-act="new">Новый проект<span class="hint">Ctrl+N</span></div>
+      <div class="menu-item" data-act="open">Открыть проект…<span class="hint">Ctrl+O</span></div>
+      <div class="menu-sep"></div>
+      <div class="menu-item" data-act="saveas">Сохранить как…<span class="hint">Ctrl+S</span></div>
+      <div class="menu-sep"></div>
+      <div class="menu-label">Последние проекты</div>
+      <div class="recent-list" id="recentList"></div>
+      <div class="menu-sep"></div>
+      <div class="menu-item" data-act="newwin">Открыть в новом окне</div>
+    </div>
+  </div>
+
+  <div class="device-badge" id="deviceBadge" title="UniBase не подключён">
+    <span class="dev-dot"></span>UniBase
+  </div>
+  <div class="spacer"></div>
+
+  <div class="spin" id="spin"></div>
+  <select id="portSel" title="COM-порт"><option>порты…</option></select>
+  <button class="btn icon ghost" id="refreshBtn" title="Обновить порты">↻</button>
+  <button class="btn ghost" id="verifyBtn" title="Только компиляция">✓ Проверить</button>
+  <button class="btn primary" id="uploadBtn" title="Скомпилировать и прошить">▶ Загрузить</button>
+  <button class="btn ghost" id="monBtn" title="Serial-монитор">◷ Монитор</button>
+</header>
+
+<div id="progressWrap"><div id="progressBar"></div></div>
+<div id="progressStage"></div>
+<main>
+  <section class="editor-wrap">
+    <div class="file-tab"><span class="ino" id="fileName">UNI_Sketch.ino</span></div>
+
+    <div class="editor-toolbar">
+      <label>Тема:</label>
+      <select id="themeSelect">
+        <option value="default">Светлая (Arduino)</option>
+        <option value="dracula">Dracula</option>
+        <option value="monokai">Monokai</option>
+        <option value="material-darker">Material Dark</option>
+        <option value="nord">Nord</option>
+      </select>
+      <div class="toolbar-sep"></div>
+      <label>Размер:</label>
+      <div class="font-size-ctrl">
+        <button id="fontDec" title="Уменьшить">−</button>
+        <span id="fontSizeLabel">14</span>
+        <button id="fontInc" title="Увеличить">+</button>
+      </div>
+
+      <div class="toolbar-spacer"></div>
+
+      <div class="editor-search" id="editorSearch">
+        <svg class="search-ico" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/>
+          <path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <input type="text" id="searchInput" placeholder="Поиск (Ctrl+F)" spellcheck="false" autocomplete="off" />
+        <span class="search-count" id="searchCount"></span>
+        <button class="search-nav" id="searchPrev" title="Назад (Shift+Enter)" tabindex="-1">▲</button>
+        <button class="search-nav" id="searchNext" title="Вперёд (Enter)" tabindex="-1">▼</button>
+        <button class="search-nav" id="searchClose" title="Очистить (Esc)" tabindex="-1">✕</button>
+      </div>
+    </div>
+
+    <textarea id="code"></textarea>
+  </section>
+
+  <aside class="side">
+    <div class="tabs" id="sideTabs">
+      <div class="tab active" data-pane="console">Консоль</div>
+      <div class="tab" data-pane="serial">Serial</div>
+      <div class="tab" data-pane="libs">Библиотеки</div>
+      <div class="tab" data-pane="docs">Документация</div>
+    </div>
+
+    <div class="panes-wrap">
+
+      <!-- консоль -->
+      <div class="pane active" data-pane="console">
+        <div class="log-toolbar">
+          <button id="consoleCopyBtn">⎘ Копировать</button>
+          <button id="consoleClearBtn">✕ Очистить</button>
+        </div>
+        <div class="log" id="console"><span class="sys">Готово к работе. Нажмите «Проверить» или «Загрузить».</span>
+</div>
+        <button class="log-scroll-btn" id="consoleScrollBtn" title="Прокрутить вниз">↓</button>
+      </div>
+
+      <!-- serial -->
+      <div class="pane" data-pane="serial">
+        <div class="serial-bar">
+          <select id="baudSel" style="min-width:110px">
+            <option>9600</option><option>57600</option>
+            <option selected>115200</option><option>230400</option><option>921600</option>
+          </select>
+          <button class="btn ghost" id="serialToggle">Подключить</button>
+          <button class="btn ghost icon" id="serialClear" title="Очистить">⌫</button>
+        </div>
+        <div class="log" id="serialLog"></div>
+        <button class="log-scroll-btn" id="serialScrollBtn" title="Прокрутить вниз">↓</button>
+        <div class="serial-input">
+          <input id="serialSend" placeholder="отправить в порт + Enter" />
+          <button class="btn ghost" id="serialSendBtn">→</button>
+        </div>
+      </div>
+
+      <!-- библиотеки -->
+      <div class="pane lib-pane" data-pane="libs">
+        <div class="lib-search">
+          <input id="libQuery" placeholder="поиск библиотеки (напр. Adafruit GFX)" />
+          <button class="btn ghost" id="libSearchBtn">Искать</button>
+        </div>
+        <div id="libResults"></div>
+        <div class="lib-section-title lib-installed-head">
+          <span>Установлено</span>
+          <span class="lib-count" id="libCount"></span>
+          <button class="mini-btn" id="libRefreshBtn"
+                  style="margin-left:auto;background:var(--panel-3);color:var(--accent-dim);">обновить</button>
+        </div>
+        <input class="lib-filter" id="libFilter" placeholder="фильтр установленных…" />
+        <div id="libInstalled"></div>
+      </div>
+
+      <!-- документация -->
+      <div class="pane docs-pane" data-pane="docs">
+        <div class="docs-bar">
+          <span class="docs-title">Документация UNI</span>
+          <button class="btn ghost" id="docsOpenExt" title="Открыть в браузере">↗ В браузере</button>
+        </div>
+        <iframe id="docsFrame" class="docs-frame" src="" title="Документация UNI"
+                referrerpolicy="no-referrer"></iframe>
+      </div>
+
+    </div>
+  </aside>
+</main>
+
+<div class="status" id="statusBar">
+  <div class="seg"><span class="led" id="ledCli"></span>arduino-cli</div>
+  <div class="seg"><span class="led" id="ledCore"></span>esp32 core</div>
+  <div class="seg"><span class="led" id="ledSerial"></span>serial</div>
+  <div class="seg" id="cliVer"></div>
+  <div id="stMsg"></div>
+</div>
+
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal" id="modalBox"></div>
+</div>
+
+<script src="/vendor/codemirror/codemirror.min.js"></script>
+<script src="/vendor/codemirror/mode/clike/clike.min.js"></script>
+<script src="/vendor/codemirror/addon/edit/closebrackets.min.js"></script>
+<script src="/vendor/codemirror/addon/edit/matchbrackets.min.js"></script>
+<script src="/vendor/codemirror/addon/hint/show-hint.min.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const api = (url, body) =>
+  fetch(url, body
+    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+    : undefined
+  ).then(r => r.json());
+
+/* ---------- current project (per window, identified by absolute .ino path) ---------- */
+const _initPath = new URLSearchParams(location.search).get("path") || null;
+let currentPath = _initPath;   // абсолютный путь к .ino текущего проекта
+let currentName = null;        // имя проекта (без .ino) для заголовка/диалогов
+
+/* ---------- documentation ---------- */
+const DOCS_URL = "https://fadeev-iliya.github.io/UNI/index_ru.html";
+
+/* ---------- editor ---------- */
+const editor = CodeMirror.fromTextArea($("#code"), {
+  mode: "text/x-c++src",
+  lineNumbers: true,
+  indentUnit: 2,
+  tabSize: 2,
+  autoCloseBrackets: true,
+  matchBrackets: true,
+  theme: "default",
+  extraKeys: {
+    "Ctrl-Space": (cm) => cm.showHint({ hint: uniHint, completeSingle: false }),
+    "Ctrl-F": () => focusSearch(),
+    "Cmd-F": () => focusSearch(),
+  },
+});
+
+/* ---------- code autocomplete (hints while typing) ---------- */
+
+// Базовый словарь: C/C++ + Arduino core + ESP32.
+const KEYWORDS = [
+  // ключевые слова и типы
+  "void","int","float","double","bool","boolean","char","byte","long","short",
+  "unsigned","signed","const","static","volatile","struct","class","enum","union",
+  "typedef","sizeof","return","if","else","for","while","do","switch","case","break",
+  "continue","default","goto","true","false","nullptr","new","delete","public",
+  "private","protected","String","uint8_t","uint16_t","uint32_t","uint64_t",
+  "int8_t","int16_t","int32_t","int64_t","size_t","word",
+  // препроцессор
+  "include","define","ifdef","ifndef","endif","pragma",
+  // Arduino core
+  "setup","loop","pinMode","digitalWrite","digitalRead","analogRead","analogWrite",
+  "analogReadResolution","analogWriteResolution","analogReference","delay",
+  "delayMicroseconds","millis","micros","map","constrain","min","max","abs","pow",
+  "sqrt","sq","sin","cos","tan","random","randomSeed","tone","noTone","pulseIn",
+  "shiftIn","shiftOut","attachInterrupt","detachInterrupt","digitalPinToInterrupt",
+  "bitRead","bitWrite","bitSet","bitClear","bit","lowByte","highByte",
+  // константы Arduino
+  "INPUT","OUTPUT","INPUT_PULLUP","INPUT_PULLDOWN","HIGH","LOW","LED_BUILTIN","PI",
+  "TWO_PI","HALF_PI","DEG_TO_RAD","RAD_TO_DEG","CHANGE","RISING","FALLING","DEC",
+  "HEX","OCT","BIN",
+  // ESP32 / периферия
+  "ledcSetup","ledcAttachPin","ledcWrite","ledcWriteTone","ledcRead","dacWrite",
+  "touchRead","esp_restart","esp_random","ESP","getFreeHeap","WiFi","Wire","SPI",
+];
+
+// Встроенные члены классов ядра — всегда доступны (парсинг не нужен).
+const CORE_MEMBERS = {
+  Serial: [
+    "begin","end","print","println","printf","write","read","available","peek",
+    "flush","setTimeout","readString","readStringUntil","readBytes","parseInt","parseFloat",
+  ],
+};
+// Встроенные объекты ядра, чей класс известен сразу (без объявления в коде).
+const CORE_OBJECTS = { Serial: "Serial", Serial1: "Serial", Serial2: "Serial" };
+
+// Динамические символы из включённых библиотек (заполняются с сервера и
+// обновляются при изменении/обновлении библиотеки — см. refreshLibSymbols()).
+let LIB_CLASSES   = {};   // { ИмяКласса: [методы] }
+let LIB_OBJECTS   = {};   // { имяОбъекта: ИмяКласса }  (extern-объекты)
+let LIB_CONSTANTS = [];   // [имена констант/enum/#define]
+
+// Сводные структуры — пересобираются rebuildVocab() при изменении словаря.
+let CLASS_MEMBERS  = {};  // CORE_MEMBERS + LIB_CLASSES (методы объединяются)
+let GLOBAL_OBJECTS = {};  // CORE_OBJECTS + LIB_OBJECTS
+let ALL_MEMBERS    = [];  // все члены всех классов одним списком
+let GLOBAL_VOCAB   = [];  // словарь для обычного набора (вне «объект.»)
+
+function rebuildVocab() {
+  CLASS_MEMBERS = {};
+  for (const [c, m] of Object.entries(CORE_MEMBERS)) CLASS_MEMBERS[c] = [...m];
+  for (const [c, m] of Object.entries(LIB_CLASSES)) {
+    CLASS_MEMBERS[c] = [...new Set([...(CLASS_MEMBERS[c] || []), ...m])];
+  }
+  GLOBAL_OBJECTS = { ...CORE_OBJECTS, ...LIB_OBJECTS };
+  ALL_MEMBERS = [...new Set([].concat(...Object.values(CLASS_MEMBERS)))];
+  GLOBAL_VOCAB = [...new Set([
+    ...KEYWORDS,
+    ...Object.keys(CLASS_MEMBERS),  // имена классов
+    ...LIB_CONSTANTS,               // константы/enum библиотек
+    ...ALL_MEMBERS,
+    ...Object.keys(GLOBAL_OBJECTS),
+  ])];
+}
+rebuildVocab();
+
+// Подтянуть символы включённых библиотек с сервера. Сервер парсит заголовки
+// на лету (кэш по mtime), поэтому после обновления библиотеки словарь свежий.
+// _libSymGen защищает от гонки: ответ устаревшего запроса не перезатрёт новый.
+let _libSymGen = 0;
+async function refreshLibSymbols() {
+  const gen = ++_libSymGen;
+  try {
+    const r = await api("/api/autocomplete/symbols");
+    if (gen !== _libSymGen) return;   // пришёл более новый запрос — игнорируем
+    if (r && r.ok) {
+      LIB_CLASSES   = r.classes   || {};
+      LIB_OBJECTS   = r.objects   || {};
+      LIB_CONSTANTS = r.constants || [];
+      rebuildVocab();
+    }
+  } catch (e) { /* офлайн/ошибка — остаёмся на ядре */ }
+}
+
+// Определить класс переменной: либо это глобальный объект, либо ищем объявление
+// вида «UniDev module;» / «UniBase robot("UNI");» в тексте скетча.
+function resolveClass(cm, obj) {
+  if (GLOBAL_OBJECTS[obj]) return GLOBAL_OBJECTS[obj];
+  const names = Object.keys(CLASS_MEMBERS);
+  if (!names.length) return null;
+  const classes = names.join("|");
+  const safe = obj.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = cm.getValue().match(new RegExp("\\b(" + classes + ")\\s+" + safe + "\\b\\s*[;,(=]"));
+  return m ? m[1] : null;
+}
+
+function filterSort(pool, prefix) {
+  const pfx = prefix.toLowerCase();
+  const list = [...new Set(pool)].filter(
+    (w) => w.toLowerCase().startsWith(pfx) && w.toLowerCase() !== pfx
+  );
+  list.sort((a, b) =>
+    a.length !== b.length ? a.length - b.length : a.toLowerCase().localeCompare(b.toLowerCase())
+  );
+  return list.slice(0, 60);
+}
+
+function uniHint(cm) {
+  const cur = cm.getCursor();
+  const upto = cm.getLine(cur.line).slice(0, cur.ch);
+
+  // 1) доступ к члену: «объект.часть» → методы именно этого класса
+  const mem = upto.match(/([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)?$/);
+  if (mem) {
+    const part = mem[2] || "";
+    const from = { line: cur.line, ch: cur.ch - part.length };
+    const to = { line: cur.line, ch: cur.ch };
+    const cls = resolveClass(cm, mem[1]);
+    const pool = cls && CLASS_MEMBERS[cls] ? CLASS_MEMBERS[cls] : ALL_MEMBERS;
+    return { list: filterSort(pool, part), from, to };
+  }
+
+  // 2) обычное слово: словарь + слова из текущего скетча
+  const wm = upto.match(/([A-Za-z_$][\w$]*)$/);
+  const part = wm ? wm[1] : "";
+  const from = { line: cur.line, ch: cur.ch - part.length };
+  const to = { line: cur.line, ch: cur.ch };
+  const pool = new Set(GLOBAL_VOCAB);
+  const re = /[A-Za-z_$][\w$]*/g;
+  let m;
+  const text = cm.getValue();
+  while ((m = re.exec(text))) pool.add(m[0]);
+  return { list: filterSort([...pool], part), from, to };
+}
+
+// авто-всплытие подсказок при наборе (не внутри строк/комментариев)
+editor.on("inputRead", (cm, change) => {
+  if (change.origin !== "+input") return;
+  const ch = change.text[0];
+  if (!ch) return;
+  const cur = cm.getCursor();
+  const tok = cm.getTokenAt(cur);
+  if (/\b(comment|string)\b/.test(tok.type || "")) return;
+
+  const upto = cm.getLine(cur.line).slice(0, cur.ch);
+  const mem = upto.match(/([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)?$/);
+
+  if (ch === ".") {
+    // сразу после точки показываем методы объекта: «module.»
+    if (mem) cm.showHint({ hint: uniHint, completeSingle: false });
+    return;
+  }
+  if (!/[A-Za-z_]/.test(ch)) return;
+  if (cm.state.completionActive) return; // уже открыто — аддон сам обновит список
+  if (mem) {
+    // в контексте «объект.» — подсказываем уже с первого символа
+    cm.showHint({ hint: uniHint, completeSingle: false });
+    return;
+  }
+  // обычное слово — после 2+ символов, чтобы не мешать
+  const wm = upto.match(/([A-Za-z_]\w*)$/);
+  if (wm && wm[1].length >= 2) cm.showHint({ hint: uniHint, completeSingle: false });
+});
+
+/* ---------- console helpers ---------- */
+
+function getScrollBtn(el) {
+  return el === $("#console") ? $("#consoleScrollBtn") : $("#serialScrollBtn");
+}
+
+function isAtBottom(el) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 10;
+}
+
+function updateScrollBtn(el) {
+  const btn = getScrollBtn(el);
+  btn.classList.toggle("visible", el.scrollHeight > el.clientHeight + 10 && !isAtBottom(el));
+}
+
+function initLogScroll(logEl, scrollBtn) {
+  // показываем/скрываем кнопку при прокрутке
+  logEl.addEventListener("scroll", () => updateScrollBtn(logEl));
+
+  // следим за добавлением контента через MutationObserver
+  new MutationObserver(() => {
+    setTimeout(() => updateScrollBtn(logEl), 0);
+  }).observe(logEl, { childList: true, subtree: true, characterData: true });
+
+  scrollBtn.addEventListener("click", () => {
+    logEl.scrollTop = logEl.scrollHeight;
+    updateScrollBtn(logEl);
+  });
+}
+
+function logLine(el, text, cls) {
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = text + "\n";
+  const wasAtBottom = isAtBottom(el);
+  el.appendChild(span);
+  // прокручиваем вниз только если и так были внизу
+  if (wasAtBottom) el.scrollTop = el.scrollHeight;
+}
+
+function clearConsole() {
+  $("#console").innerHTML = "";
+}
+
+function setWorking(on) {
+  document.body.classList.toggle("working", on);
+  $("#uploadBtn").disabled = on;
+  $("#verifyBtn").disabled = on;
+}
+function setStatus(msg) { $("#stMsg").textContent = msg; }
+
+/* ---------- env / ports ---------- */
+async function checkEnv() {
+  const e = await api("/api/env");
+  $("#ledCli").className  = "led " + (e.arduino_cli ? "on" : "off");
+  $("#ledCore").className = "led " + (e.esp32_core ? "on" : "off");
+  $("#cliVer").textContent = e.version || "";
+  if (!e.arduino_cli)
+    logLine($("#console"), "⚠ arduino-cli не найден — см. README, раздел установки.", "err");
+  else if (!e.esp32_core)
+    logLine($("#console"), "⚠ Ядро esp32:esp32 не установлено. Выполните: arduino-cli core install esp32:esp32", "err");
+}
+
+let _knownPorts = new Set();
+let userPickedPort = null;   // порт, явно выбранный пользователем
+
+function setDeviceConnected(on, port) {
+  const b = $("#deviceBadge");
+  b.classList.toggle("connected", on);
+  b.title = on
+    ? "UniBase подключён" + (port ? " · " + port : "")
+    : "UniBase не подключён";
+}
+
+async function loadPorts(autoSelect = false) {
+  const { ports } = await api("/api/ports");
+  const sel = $("#portSel");
+  const prev = sel.value;
+  sel.innerHTML = "";
+
+  if (!ports.length) {
+    sel.innerHTML = "<option value=''>нет портов</option>";
+    _knownPorts = new Set();
+    setDeviceConnected(false);
+    return;
+  }
+
+  let ch340Port = null;
+  ports.forEach(p => {
+    const o = document.createElement("option");
+    o.value = p.addr;
+    o.textContent = p.ch340 ? `${p.addr} · UniBase` : p.addr;
+    sel.appendChild(o);
+    if (p.ch340) ch340Port = p.addr;
+  });
+
+  setDeviceConnected(!!ch340Port, ch340Port);
+
+  const addrs = ports.map(p => p.addr);
+
+  // только что подключённый UniBase (CH340) — порт, которого не было в прошлый раз
+  const newCh340 = ports.find(p => p.ch340 && !_knownPorts.has(p.addr));
+
+  let target;
+  if (newCh340) {
+    target = newCh340.addr;                              // подключили UniBase → выбираем его
+    userPickedPort = null;                               // и сбрасываем ручной выбор
+    setStatus(`UniBase → ${newCh340.addr}`);
+  } else if (userPickedPort && addrs.includes(userPickedPort)) {
+    target = userPickedPort;                             // уважаем ручной выбор
+  } else if (ch340Port) {
+    target = ch340Port;                                  // есть UniBase → выбираем его
+  } else if (addrs.includes(prev)) {
+    target = prev;                                       // сохраняем прежний выбор
+  } else {
+    target = addrs[0];                                   // иначе первый доступный
+  }
+  sel.value = target;
+
+  _knownPorts = new Set(addrs);
+}
+
+// автоопрос портов каждые 2 секунды
+setInterval(() => loadPorts(true), 2000);
+
+/* ---------- load code ---------- */
+// Применяет открытый проект к UI. Код подменяем только если он реально отличается,
+// чтобы не сбрасывать историю отмены и не дёргать автосохранение зря.
+function setActiveSketch(path, name, code) {
+  currentPath = path || null;
+  currentName = name || "";
+  $("#fileName").textContent = (name || "") + ".ino";
+  document.title = "UNI IDE · " + (name || "");
+  if (typeof code === "string" && code !== editor.getValue()) {
+    editor.setValue(code);
+  }
+}
+
+async function loadCode() {
+  const q = currentPath ? "?path=" + encodeURIComponent(currentPath) : "";
+  const d = await api("/api/code" + q);
+  setActiveSketch(d.path, d.name, d.code || "");
+}
+
+/* ---------- progress ---------- */
+const COMPILE_STAGES = [
+  { re: /Compiling sketch/i,            pct: 10, label: "Компиляция скетча…" },
+  { re: /Compiling libraries/i,         pct: 30, label: "Компиляция библиотек…" },
+  { re: /Compiling core/i,              pct: 50, label: "Компиляция ядра ESP32…" },
+  { re: /Linking everything/i,          pct: 75, label: "Линковка…" },
+  { re: /Sketch uses/i,                 pct: 88, label: "Готово, проверка размера…" },
+  { re: /Connecting|esptool/i,          pct: 90, label: "Подключение к плате…" },
+  { re: /Writing at|Flash.*%/i,         pct: null, label: "Запись прошивки…" },
+  { re: /Leaving|Hash of data verified/i, pct: 98, label: "Проверка прошивки…" },
+];
+
+function progressStart(indeterminate = false) {
+  const w = $("#progressWrap"), s = $("#progressStage");
+  w.classList.add("active");
+  s.classList.add("active");
+  if (indeterminate) {
+    w.classList.add("indeterminate");
+    $("#progressBar").style.width = "0%";
+  } else {
+    w.classList.remove("indeterminate");
+    setProgress(2, "Подготовка…");
+  }
+}
+function setProgress(pct, label) {
+  $("#progressBar").style.width = pct + "%";
+  $("#progressStage").textContent = label || "";
+}
+function progressDone(ok) {
+  setProgress(ok ? 100 : 60, ok ? "Готово" : "Ошибка");
+  setTimeout(() => {
+    $("#progressWrap").classList.remove("active", "indeterminate");
+    $("#progressStage").classList.remove("active");
+    $("#progressBar").style.width = "0%";
+    $("#progressStage").textContent = "";
+  }, 900);
+}
+
+function applyStage(line) {
+  for (const s of COMPILE_STAGES) {
+    if (s.re.test(line)) {
+      // Writing at 0x... (N %) — вытащить процент
+      if (s.label === "Запись прошивки…") {
+        const m = line.match(/\((\d+)\s*%\)/);
+        const flash = m ? Math.round(90 + parseInt(m[1]) * 0.08) : 92;
+        setProgress(flash, `Запись прошивки… ${m ? m[1] + "%" : ""}`);
+      } else if (s.pct !== null) {
+        setProgress(s.pct, s.label);
+      }
+      return;
+    }
+  }
+}
+
+/* ---------- SSE runner ---------- */
+function runStream(url, { onStart, onDone }) {
+  return new Promise((resolve) => {
+    onStart?.();
+    const es = new EventSource(url);
+    es.onmessage = (e) => {
+      const d = JSON.parse(e.data);
+      if (d.line) {
+        applyStage(d.line);
+        const cls = /error:/i.test(d.line) ? "err"
+                  : /warning:/i.test(d.line) ? null
+                  : null;
+        logLine($("#console"), d.line, cls);
+      }
+      if (d.done) {
+        es.close();
+        onDone?.(d.ok);
+        resolve(d.ok);
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      logLine($("#console"), "✗ Потеряно соединение со сервером.", "err");
+      onDone?.(false);
+      resolve(false);
+    };
+  });
+}
+
+/* ---------- compile / upload ---------- */
+async function verify() {
+  clearConsole();
+  switchPane("console");
+  logLine($("#console"), "→ Компиляция (esp32:esp32:esp32)…", "sys");
+  setWorking(true); setStatus("компиляция…");
+  progressStart();
+
+  await api("/api/save", { code: editor.getValue(), path: currentPath });
+  const ok = await runStream(`/api/compile/stream?path=${encodeURIComponent(currentPath || "")}`, {
+    onDone: (ok) => {
+      logLine($("#console"), ok ? "✓ Компиляция успешна." : "✗ Ошибка компиляции.", ok ? "ok" : "err");
+      progressDone(ok);
+      setWorking(false);
+      setStatus(ok ? "готово" : "ошибка");
+    },
+  });
+}
+
+async function upload() {
+  const port = $("#portSel").value;
+  if (!port) {
+    setStatus("выберите порт"); switchPane("console");
+    logLine($("#console"), "✗ Сначала выберите COM-порт.", "err"); return;
+  }
+  clearConsole();
+  switchPane("console");
+  logLine($("#console"), `→ Компиляция и прошивка на ${port}…`, "sys");
+  setWorking(true); setStatus("прошивка…");
+  progressStart();
+
+  await api("/api/save", { code: editor.getValue(), path: currentPath });
+  await runStream(`/api/upload/stream?port=${encodeURIComponent(port)}&path=${encodeURIComponent(currentPath || "")}`, {
+    onDone: (ok) => {
+      logLine($("#console"), ok ? "✓ Прошивка завершена." : "✗ Ошибка. Проверьте порт/кабель (на части плат держите BOOT).", ok ? "ok" : "err");
+      progressDone(ok);
+      setWorking(false);
+      setStatus(ok ? "загружено" : "ошибка");
+    },
+  });
+}
+
+/* ---------- autosave (всегда, без Ctrl+S) ---------- */
+let saveTimer;
+editor.on("change", () => {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    if (!currentPath) return;
+    api("/api/save", { code: editor.getValue(), path: currentPath });
+  }, 800);
+});
+
+/* ---------- File menu ---------- */
+const fileMenuBtn  = $("#fileMenuBtn");
+const fileMenuList = $("#fileMenuList");
+
+function closeMenu() {
+  fileMenuList.classList.remove("open");
+  fileMenuBtn.classList.remove("open");
+}
+fileMenuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const open = fileMenuList.classList.toggle("open");
+  fileMenuBtn.classList.toggle("open", open);
+  if (open) renderRecent();
+});
+fileMenuList.addEventListener("click", (e) => e.stopPropagation());
+document.addEventListener("click", closeMenu);
+fileMenuList.querySelectorAll(".menu-item").forEach(it =>
+  it.addEventListener("click", () => { closeMenu(); handleMenu(it.dataset.act); }));
+
+async function saveCurrent(msg) {
+  if (!currentPath) return;
+  await api("/api/save", { code: editor.getValue(), path: currentPath });
+  if (msg) setStatus(msg);
+}
+
+async function handleMenu(act) {
+  if (act === "saveas")       await saveAs();
+  else if (act === "new")     await newSketch();
+  else if (act === "open")    await openDialog();
+  else if (act === "newwin")  { await saveCurrent(); await openWindow(currentPath); }
+}
+
+async function openWindow(path) {
+  const r = await api("/api/window/new", { path });
+  setStatus(r.ok ? "открыто новое окно" : "не удалось открыть окно");
+}
+
+/* ---------- modal ---------- */
+const overlay  = $("#modalOverlay");
+const modalBox = $("#modalBox");
+
+function closeModal() { overlay.classList.remove("open"); modalBox.innerHTML = ""; }
+function showModal(title, bodyHTML, actionsHTML) {
+  modalBox.innerHTML =
+    `<h3>${title}</h3><div class="modal-body">${bodyHTML}</div>` +
+    `<div class="modal-actions">${actionsHTML}</div>`;
+  overlay.classList.add("open");
+}
+overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(); });
+
+/* ---------- project actions (системные окна Windows) ---------- */
+// Новый проект — мгновенно создаёт стандартный uni_sketchN, без диалога.
+async function newSketch() {
+  await saveCurrent();
+  const r = await api("/api/sketch/new", {});
+  if (!r || !r.ok) { setStatus("не удалось создать проект"); return; }
+  setActiveSketch(r.path, r.name, r.code);
+  setStatus("создан проект " + r.name);
+}
+
+// Открыть проект — системное окно Windows, можно выбрать любой .ino на диске.
+async function openDialog() {
+  await saveCurrent();
+  const r = await api("/api/dialog/open", {});
+  if (!r || r.cancelled) return;
+  if (!r.ok) { setStatus(r.log || "не удалось открыть"); return; }
+  setActiveSketch(r.path, r.name, r.code);
+  setStatus("открыт " + r.name);
+}
+
+// Сохранить как — системное окно Windows, задаёт новое имя файла и папки.
+async function saveAs() {
+  await saveCurrent();
+  const r = await api("/api/dialog/saveas", { code: editor.getValue(), name: currentName });
+  if (!r || r.cancelled) return;
+  if (!r.ok) { setStatus(r.log || "не удалось сохранить"); return; }
+  setActiveSketch(r.path, r.name);   // код тот же — не подменяем
+  setStatus("сохранено как " + r.name);
+}
+
+// Список последних проектов в меню «Файл».
+async function renderRecent() {
+  const box = $("#recentList");
+  if (!box) return;
+  const r = await api("/api/recent");
+  const items = (r && r.recent) || [];
+  if (!items.length) {
+    box.innerHTML = `<div class="recent-empty">пока нет</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  items.forEach(it => {
+    const cur = currentPath && it.path.toLowerCase() === currentPath.toLowerCase();
+    const row = document.createElement("div");
+    row.className = "recent-item" + (cur ? " cur" : "") + (it.exists ? "" : " missing");
+    row.innerHTML =
+      `<span class="r-name"></span><span class="r-path"></span>`;
+    row.querySelector(".r-name").textContent = it.name;
+    const pth = row.querySelector(".r-path");
+    pth.textContent = it.path;
+    pth.title = it.path;
+    if (it.exists && !cur) {
+      row.addEventListener("click", async () => {
+        closeMenu();
+        await saveCurrent();
+        currentPath = it.path;
+        await loadCode();
+        setStatus("открыт " + it.name);
+      });
+    } else if (!it.exists) {
+      row.title = "файл не найден";
+    }
+    box.appendChild(row);
+  });
+}
+
+/* ---------- tabs ---------- */
+function switchPane(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.pane === name));
+  document.querySelectorAll(".pane").forEach(p => p.classList.toggle("active", p.dataset.pane === name));
+  // документацию грузим лениво — только при первом открытии вкладки
+  if (name === "docs") {
+    const fr = $("#docsFrame");
+    if (fr && !fr.getAttribute("src")) fr.setAttribute("src", DOCS_URL);
+  }
+}
+document.querySelectorAll(".tab").forEach(t =>
+  t.addEventListener("click", () => switchPane(t.dataset.pane)));
+
+/* ---------- serial monitor ---------- */
+let monOn = false, monPoll = null;
+async function serialToggle() {
+  if (monOn) {
+    await api("/api/monitor/stop", {});
+    stopMonUI();
+  } else {
+    const port = $("#portSel").value;
+    if (!port) { setStatus("выберите порт"); return; }
+    const r = await api("/api/monitor/start", { port, baud: $("#baudSel").value });
+    if (r.ok) startMonUI();
+    else logLine($("#serialLog"), "✗ " + (r.log || "не удалось открыть порт"), "err");
+  }
+}
+function startMonUI() {
+  monOn = true;
+  $("#serialToggle").textContent = "Отключить";
+  $("#serialToggle").classList.add("active");
+  $("#monBtn").classList.add("active");
+  $("#ledSerial").className = "led on";
+  switchPane("serial");
+  monPoll = setInterval(async () => {
+    const r = await api("/api/monitor/read");
+    if (r.data) {
+      const el = $("#serialLog");
+      const span = document.createElement("span");
+      span.className = "rx";
+      span.textContent = r.data;
+      el.appendChild(span);
+      el.scrollTop = el.scrollHeight;
+    }
+    if (!r.on) stopMonUI();
+  }, 300);
+}
+function stopMonUI() {
+  monOn = false;
+  clearInterval(monPoll);
+  $("#serialToggle").textContent = "Подключить";
+  $("#serialToggle").classList.remove("active");
+  $("#monBtn").classList.remove("active");
+  $("#ledSerial").className = "led off";
+}
+async function serialSend() {
+  const inp = $("#serialSend");
+  if (!inp.value || !monOn) return;
+  await api("/api/monitor/send", { data: inp.value });
+  inp.value = "";
+}
+
+/* ---------- libraries ---------- */
+function esc(s) {
+  return (s == null ? "" : String(s))
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+let _installedLibs = [];
+let _acEnabled = new Set();   // библиотеки, чьи методы подмешаны в подсказки
+
+async function loadInstalled() {
+  $("#libInstalled").innerHTML = "<div class='lib-item desc'>загрузка…</div>";
+  const [r, ac] = await Promise.all([api("/api/libs"), api("/api/autocomplete/libs")]);
+  _installedLibs = r.libs || [];
+  _acEnabled = new Set((ac && ac.enabled) || []);
+  renderInstalled();
+  // после переустановки/обновления библиотеки словарь подсказок пересобирается
+  // (сервер перечитает заголовки, т.к. кэш инвалидируется по mtime файлов)
+  refreshLibSymbols();
+}
+
+function renderInstalled() {
+  const box = $("#libInstalled");
+  const f = ($("#libFilter").value || "").toLowerCase().trim();
+  const libs = _installedLibs.filter(l => !f ||
+    (l.name || "").toLowerCase().includes(f) ||
+    (l.sentence || "").toLowerCase().includes(f) ||
+    (l.author || "").toLowerCase().includes(f));
+
+  $("#libCount").textContent = _installedLibs.length
+    ? (f ? `${libs.length}/${_installedLibs.length}` : `${_installedLibs.length}`)
+    : "";
+
+  if (!_installedLibs.length) { box.innerHTML = "<div class='lib-item desc'>пусто</div>"; return; }
+  if (!libs.length) { box.innerHTML = "<div class='lib-item desc'>ничего не найдено</div>"; return; }
+
+  box.innerHTML = "";
+  libs.forEach(l => {
+    const arch = (l.architectures || []).map(a => `<span class="lib-chip">${esc(a)}</span>`).join("");
+    const exs  = (l.examples || []).length ? `<span class="lib-chip">${l.examples.length} прим.</span>` : "";
+    const loc  = l.location === "user" ? "пользователь"
+               : l.location === "platform" ? "платформа"
+               : (l.location || "");
+    const web  = l.website
+      ? `<a class="lib-web" href="${esc(l.website)}" target="_blank" rel="noopener">сайт ↗</a>` : "";
+    const d = document.createElement("div");
+    d.className = "lib-item";
+    d.innerHTML =
+      `<div class="lib-head">` +
+        `<div class="name">${esc(l.name)} <span>v${esc(l.version) || "?"}</span></div>` +
+        `<label class="lib-ac" title="Добавлять методы этой библиотеки в подсказки кода">` +
+          `<input type="checkbox" ${_acEnabled.has(l.name) ? "checked" : ""}>` +
+          `<span>подсказки</span>` +
+        `</label>` +
+      `</div>` +
+      (l.sentence ? `<div class="desc">${esc(l.sentence)}</div>` : "") +
+      `<div class="meta">` +
+        (l.author ? `<span>${esc(l.author)}</span>` : "") +
+        arch + exs +
+        (loc ? `<span class="lib-loc">${esc(loc)}</span>` : "") +
+        web +
+      `</div>`;
+    const cb = d.querySelector(".lib-ac input");
+    if (cb) cb.addEventListener("change", async () => {
+      cb.disabled = true;
+      const res = await api("/api/autocomplete/libs", { name: l.name, enabled: cb.checked });
+      cb.disabled = false;
+      if (res && res.ok) {
+        _acEnabled = new Set(res.enabled || []);
+        await refreshLibSymbols();
+      } else {
+        cb.checked = !cb.checked;  // откат при ошибке
+      }
+    });
+    box.appendChild(d);
+  });
+}
+async function libSearch() {
+  const q = $("#libQuery").value.trim();
+  if (!q) return;
+  const box = $("#libResults");
+  box.innerHTML = "<div class='lib-item desc'>поиск…</div>";
+  const r = await api("/api/lib/search", { q });
+  box.innerHTML = "";
+  if (!r.results.length) { box.innerHTML = "<div class='lib-item desc'>ничего не найдено</div>"; return; }
+  r.results.forEach(l => {
+    const d = document.createElement("div");
+    d.className = "lib-item";
+    d.innerHTML = `
+      <div class="row">
+        <div class="name">${l.name} <span>v${l.version}</span></div>
+        <button class="mini-btn">установить</button>
+      </div>
+      <div class="desc">${l.sentence || ""}</div>`;
+    d.querySelector(".mini-btn").addEventListener("click", async (ev) => {
+      ev.target.textContent = "…"; ev.target.disabled = true;
+      const res = await api("/api/lib/install", { name: l.name });
+      ev.target.textContent = res.ok ? "✓ готово" : "ошибка";
+      if (res.ok) loadInstalled();
+    });
+    box.appendChild(d);
+  });
+}
+
+/* ---------- bindings ---------- */
+$("#verifyBtn").addEventListener("click", verify);
+$("#uploadBtn").addEventListener("click", upload);
+$("#refreshBtn").addEventListener("click", () => loadPorts(true));
+$("#portSel").addEventListener("change", () => { userPickedPort = $("#portSel").value; });
+
+/* ---------- console toolbar ---------- */
+initLogScroll($("#console"), $("#consoleScrollBtn"));
+initLogScroll($("#serialLog"), $("#serialScrollBtn"));
+
+$("#consoleCopyBtn").addEventListener("click", function () {
+  const text = $("#console").innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    this.textContent = "✓ Скопировано";
+    this.classList.add("copied");
+    setTimeout(() => {
+      this.textContent = "⎘ Копировать";
+      this.classList.remove("copied");
+    }, 1500);
+  });
+});
+
+$("#consoleClearBtn").addEventListener("click", clearConsole);
+$("#monBtn").addEventListener("click", serialToggle);
+$("#serialToggle").addEventListener("click", serialToggle);
+$("#serialClear").addEventListener("click", () => $("#serialLog").innerHTML = "");
+$("#serialSendBtn").addEventListener("click", serialSend);
+$("#serialSend").addEventListener("keydown", e => { if (e.key === "Enter") serialSend(); });
+$("#libSearchBtn").addEventListener("click", libSearch);
+$("#libQuery").addEventListener("keydown", e => { if (e.key === "Enter") libSearch(); });
+$("#libFilter").addEventListener("input", renderInstalled);
+$("#libRefreshBtn").addEventListener("click", loadInstalled);
+$("#docsOpenExt").addEventListener("click", () => api("/api/open", { url: DOCS_URL }));
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); upload(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r") { e.preventDefault(); verify(); }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") { e.preventDefault(); saveAs(); }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") { e.preventDefault(); newSketch(); }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "o") { e.preventDefault(); openDialog(); }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+    if (!e.defaultPrevented) { e.preventDefault(); focusSearch(); }
+  }
+  if (e.key === "Escape") closeModal();
+});
+
+/* ---------- поиск по коду + подсветка одинаковых слов ---------- */
+function _debounce(fn, ms) {
+  let t;
+  return function (...a) { clearTimeout(t); t = setTimeout(() => fn.apply(null, a), ms); };
+}
+function _escRe(s) { return s.replace(/[\\\[.+*?(){|^$]/g, "\\$&"); }
+
+// --- подсветка всех вхождений выделенного слова ---
+let _wordOverlay = null;
+function _makeMatchOverlay(query, style) {
+  const re = new RegExp("\\b" + _escRe(query) + "\\b", "g");
+  return { token(stream) {
+    re.lastIndex = stream.pos;
+    const m = re.exec(stream.string);
+    if (m && m.index === stream.pos) { stream.pos += m[0].length || 1; return style; }
+    if (m) { stream.pos = m.index; } else { stream.skipToEnd(); }
+  } };
+}
+function clearWordHighlight() {
+  if (_wordOverlay) { editor.removeOverlay(_wordOverlay); _wordOverlay = null; }
+}
+function refreshWordHighlight() {
+  clearWordHighlight();
+  if ($("#searchInput").value) return;            // не мешаем активному поиску
+  if (!editor.somethingSelected()) return;
+  const sels = editor.getSelections();
+  if (sels.length !== 1) return;
+  const word = sels[0];
+  if (word.length < 2 || !/^[A-Za-z_]\w*$/.test(word)) return;   // только «слова»
+  _wordOverlay = _makeMatchOverlay(word, "matchhighlight");
+  editor.addOverlay(_wordOverlay);
+}
+editor.on("cursorActivity", _debounce(refreshWordHighlight, 120));
+
+// --- поле поиска (Ctrl+F) ---
+let _searchMarks = [];   // подсветка всех совпадений
+let _searchHits  = [];   // [{from,to}]
+let _searchIdx   = -1;
+let _searchCur   = null; // отдельная метка текущего совпадения
+
+function _clearSearchMarks() {
+  _searchMarks.forEach(m => m.clear());
+  _searchMarks = [];
+  if (_searchCur) { _searchCur.clear(); _searchCur = null; }
+}
+function _updateSearchCount() {
+  const el = $("#searchCount");
+  if (!$("#searchInput").value) { el.textContent = ""; el.classList.remove("nomatch"); return; }
+  if (!_searchHits.length) { el.textContent = "0/0"; el.classList.add("nomatch"); return; }
+  el.classList.remove("nomatch");
+  el.textContent = (_searchIdx + 1) + "/" + _searchHits.length;
+}
+function _nearestHit() {
+  const c = editor.getCursor("from");   // начало выделения → текущим станет само выделенное слово
+  for (let i = 0; i < _searchHits.length; i++) {
+    const f = _searchHits[i].from;
+    if (f.line > c.line || (f.line === c.line && f.ch >= c.ch)) return i;
+  }
+  return 0;
+}
+function _showCurrentHit(scroll) {
+  if (_searchCur) { _searchCur.clear(); _searchCur = null; }
+  const h = _searchHits[_searchIdx];
+  if (!h) return;
+  _searchCur = editor.markText(h.from, h.to, { className: "cm-searchmatch-current" });
+  if (scroll) { editor.scrollIntoView({ from: h.from, to: h.to }, 90); editor.setCursor(h.from); }
+}
+function runSearch(query, keepIdx) {
+  _clearSearchMarks();
+  _searchHits = [];
+  if (!query) { _searchIdx = -1; _updateSearchCount(); return; }
+  const lc = query.toLowerCase();
+  const n  = editor.lineCount();
+  for (let line = 0; line < n; line++) {
+    const hay = editor.getLine(line).toLowerCase();
+    let idx = 0;
+    while ((idx = hay.indexOf(lc, idx)) !== -1) {
+      _searchHits.push({ from: { line, ch: idx }, to: { line, ch: idx + query.length } });
+      idx += query.length;
+    }
+  }
+  _searchMarks = _searchHits.map(h => editor.markText(h.from, h.to, { className: "cm-searchmatch" }));
+  if (_searchHits.length) {
+    if (!keepIdx || _searchIdx < 0 || _searchIdx >= _searchHits.length) _searchIdx = _nearestHit();
+    _showCurrentHit(true);
+  } else {
+    _searchIdx = -1;
+  }
+  _updateSearchCount();
+}
+function nextMatch(dir) {
+  if (!_searchHits.length) return;
+  _searchIdx = (_searchIdx + dir + _searchHits.length) % _searchHits.length;
+  _showCurrentHit(true);
+  _updateSearchCount();
+}
+function focusSearch() {
+  const inp = $("#searchInput");
+  $("#editorSearch").classList.add("active");
+  const sel = editor.somethingSelected() ? editor.getSelection() : "";
+  if (sel && !/\n/.test(sel)) inp.value = sel;
+  clearWordHighlight();
+  if (inp.value) runSearch(inp.value, false);
+  inp.focus();
+  inp.select();
+}
+function closeSearch() {
+  $("#searchInput").value = "";
+  _clearSearchMarks();
+  _searchHits = []; _searchIdx = -1;
+  $("#editorSearch").classList.remove("active");
+  _updateSearchCount();
+  editor.focus();
+  refreshWordHighlight();
+}
+
+$("#searchInput").addEventListener("input", () => runSearch($("#searchInput").value, false));
+$("#searchInput").addEventListener("keydown", e => {
+  if (e.key === "Enter")       { e.preventDefault(); nextMatch(e.shiftKey ? -1 : 1); }
+  else if (e.key === "Escape") { e.preventDefault(); closeSearch(); }
+});
+$("#searchInput").addEventListener("blur", () => { if (!$("#searchInput").value) $("#editorSearch").classList.remove("active"); });
+$("#searchNext").addEventListener("click", () => { nextMatch(1);  $("#searchInput").focus(); });
+$("#searchPrev").addEventListener("click", () => { nextMatch(-1); $("#searchInput").focus(); });
+$("#searchClose").addEventListener("click", closeSearch);
+
+// при правке кода — пересчитать совпадения, если поиск активен
+editor.on("change", _debounce(() => {
+  if ($("#searchInput").value) runSearch($("#searchInput").value, true);
+}, 200));
+
+/* ---------- editor toolbar ---------- */
+let fontSize = parseInt(localStorage.getItem("uni-font-size") || "14");
+
+function applyFontSize(size) {
+  fontSize = Math.min(24, Math.max(10, size));
+  document.querySelector(".CodeMirror").style.fontSize = fontSize + "px";
+  $("#fontSizeLabel").textContent = fontSize;
+  localStorage.setItem("uni-font-size", fontSize);
+  editor.refresh();
+}
+
+$("#fontInc").addEventListener("click", () => applyFontSize(fontSize + 1));
+$("#fontDec").addEventListener("click", () => applyFontSize(fontSize - 1));
+
+$("#themeSelect").addEventListener("change", function () {
+  const theme = this.value;
+  editor.setOption("theme", theme);
+  // светлая тема — белый фон редактора; тёмные — фон из темы
+  const isLight = theme === "default";
+  document.querySelector(".CodeMirror").style.background = isLight ? "#ffffff" : "";
+  localStorage.setItem("uni-theme", theme);
+});
+
+// восстановить настройки
+(function restoreEditorPrefs() {
+  const savedTheme = localStorage.getItem("uni-theme") || "default";
+  $("#themeSelect").value = savedTheme;
+  editor.setOption("theme", savedTheme);
+  applyFontSize(fontSize);
+})();
+
+/* ---------- init ---------- */
+(async function init() {
+  await loadCode();
+  await checkEnv();
+  await loadPorts(true);
+  await loadInstalled();   // включает refreshLibSymbols() — подтянет методы библиотек
+})();
+</script>
+</body>
+</html>

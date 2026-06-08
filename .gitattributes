@@ -1,0 +1,10 @@
+# Нормализация переводов строк: в репозитории — LF, при checkout — родные для ОS.
+* text=auto
+
+# Явные бинарники — никогда не трогать переводы строк.
+*.exe   binary
+*.EXE   binary
+*.ico   binary
+*.png   binary
+*.woff2 binary
+*.zip   binary

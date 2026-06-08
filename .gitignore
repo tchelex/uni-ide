@@ -1,0 +1,50 @@
+# ============================================================
+#  UNI IDE — .gitignore
+#  В репозиторий идут ТОЛЬКО исходники. Тяжёлые артефакты сборки
+#  и переносимый тулчейн (несколько ГБ) не коммитятся.
+#  Установщик раздаётся через GitHub Releases, а не из репо.
+# ============================================================
+
+# --- Артефакты сборки ---
+/dist/
+/build/
+/installer-out/
+/build-tmp/
+/build-cache/
+*.spec
+
+# --- Переносимый тулчейн ESP32 (печётся prepare_bundle.py, ~6 ГБ) ---
+/arduino-data/
+/arduino-user/
+/arduino-downloads/
+/arduino-cli.exe
+/arduino-cli
+.w_test
+
+# --- Состояние/настройки во время работы приложения ---
+/Uni_Sketches/
+/UNI-Sketches/
+/UNI_Sketch/
+uni-ide-recent.json
+uni-ide-autocomplete.json
+uni-ide-log.txt
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- Сертификаты подписи (никогда не коммитить ключи) ---
+*.pfx
+*.p12
+*.pvk
+*.key
+
+# --- ОС / редакторы / агент ---
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
+/.claude/
