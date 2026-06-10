@@ -1031,7 +1031,9 @@ def examples_list():
                 })
         except Exception:
             pass
-    libs.sort(key=lambda L: (0 if L["user"] else 1, L["lib"].lower()))
+    # порядок: библиотека UNI (родная для платформы) → пользовательские → остальные
+    libs.sort(key=lambda L: (0 if L["lib"].upper() == "UNI" else (1 if L["user"] else 2),
+                             L["lib"].lower()))
     _EXAMPLES_CACHE["t"] = now
     _EXAMPLES_CACHE["libs"] = libs
     return jsonify({"ok": True, "libs": libs})

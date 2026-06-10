@@ -1760,7 +1760,13 @@ async function loadExamples(force) {
     h.innerHTML = `<span></span><span class="ex-cnt"></span>`;
     h.firstChild.textContent = L.lib;
     h.lastChild.textContent = L.examples.length;
-    h.addEventListener("click", (e) => { e.stopPropagation(); g.classList.toggle("open"); });
+    h.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // аккордеон: открыта только одна библиотека за раз
+      const wasOpen = g.classList.contains("open");
+      box.querySelectorAll(".ex-group.open").forEach(x => x.classList.remove("open"));
+      if (!wasOpen) g.classList.add("open");
+    });
     g.appendChild(h);
     const items = document.createElement("div");
     items.className = "ex-items";
