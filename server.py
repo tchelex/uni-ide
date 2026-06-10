@@ -1105,6 +1105,9 @@ def libs_install():
     if not name:
         return jsonify({"ok": False, "log": "Не указано имя библиотеки."})
     ok, out, err = run_cli(["lib", "install", name])
+    if ok:
+        # примеры новой библиотеки должны сразу появиться в меню «Примеры»
+        _EXAMPLES_CACHE["libs"] = None
     return jsonify({"ok": ok, "log": (out + err).strip()})
 
 

@@ -670,12 +670,36 @@
   .lib-installed-head { display: flex; align-items: center; gap: 8px; }
   .lib-count { font-size: 11px; color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
   .lib-filter {
-    width: 100%; height: 30px; margin: 4px 0 8px;
+    flex: 1; min-width: 0; height: 30px;
     font-family: var(--mono); font-size: 12px;
     border: 1px solid var(--line); border-radius: 4px;
     padding: 0 10px; outline: none;
   }
   .lib-filter:focus { border-color: var(--accent); }
+
+  /* вкладки внутри панели «Библиотеки» */
+  .lib-tabs {
+    display: flex; gap: 4px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  .lib-tab {
+    font-family: var(--sans); font-size: 12px; font-weight: 600;
+    color: var(--muted);
+    padding: 7px 12px;
+    border: 1px solid transparent; border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  .lib-tab:hover { color: var(--text); background: var(--panel-3); }
+  .lib-tab.active {
+    color: var(--accent);
+    background: #fff;
+    border-color: var(--line);
+    margin-bottom: -1px;
+  }
+  .lib-subpane { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .lib-subpane[hidden] { display: none; }
 
   /* ---------- File menu ---------- */
   .menu { position: relative; }
@@ -1045,19 +1069,31 @@
 
       <!-- библиотеки -->
       <div class="pane lib-pane" data-pane="libs">
-        <div class="lib-search">
-          <input id="libQuery" placeholder="поиск библиотеки (напр. Adafruit GFX)" />
-          <button class="btn ghost" id="libSearchBtn">Искать</button>
+        <div class="lib-tabs">
+          <div class="lib-tab active" data-ltab="installed">Установленные <span class="lib-count" id="libCount"></span></div>
+          <div class="lib-tab" data-ltab="install">Установить библиотеку</div>
         </div>
-        <div id="libResults"></div>
-        <div class="lib-section-title lib-installed-head">
-          <span>Установлено</span>
-          <span class="lib-count" id="libCount"></span>
-          <button class="mini-btn" id="libRefreshBtn"
-                  style="margin-left:auto;background:var(--panel-3);color:var(--accent-dim);">обновить</button>
+
+        <div class="lib-subpane" data-ltab="installed">
+          <div class="lib-installed-head">
+            <input class="lib-filter" id="libFilter" placeholder="фильтр установленных…" />
+            <button class="mini-btn" id="libRefreshBtn"
+                    style="background:var(--panel-3);color:var(--accent-dim);">обновить</button>
+          </div>
+          <div id="libInstalled"></div>
         </div>
-        <input class="lib-filter" id="libFilter" placeholder="фильтр установленных…" />
-        <div id="libInstalled"></div>
+
+        <div class="lib-subpane" data-ltab="install" hidden>
+          <div class="lib-search">
+            <input id="libQuery" placeholder="поиск библиотеки (напр. Adafruit GFX)" />
+            <button class="btn ghost" id="libSearchBtn">Искать</button>
+          </div>
+          <div id="libResults">
+            <div class="lib-item desc">Введите название и нажмите «Искать».
+              Для поиска и установки нужен интернет; после установки примеры
+              библиотеки появятся в меню «Файл → Примеры».</div>
+          </div>
+        </div>
       </div>
 
       <!-- документация -->
@@ -1901,7 +1937,11 @@ async function libSearch() {
       ev.target.textContent = "…"; ev.target.disabled = true;
       const res = await api("/api/lib/install", { name: l.name });
       ev.target.textContent = res.ok ? "✓ готово" : "ошибка";
-      if (res.ok) loadInstalled();
+      if (res.ok) {
+        loadInstalled();
+        _examplesLoaded = false;   // примеры библиотеки появятся в «Файл → Примеры»
+        setStatus("библиотека установлена: " + l.name);
+      }
     });
     box.appendChild(d);
   });
@@ -1939,6 +1979,13 @@ $("#libSearchBtn").addEventListener("click", libSearch);
 $("#libQuery").addEventListener("keydown", e => { if (e.key === "Enter") libSearch(); });
 $("#libFilter").addEventListener("input", renderInstalled);
 $("#libRefreshBtn").addEventListener("click", loadInstalled);
+// вкладки панели «Библиотеки»: Установленные / Установить библиотеку
+document.querySelectorAll(".lib-tab").forEach(t =>
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".lib-tab").forEach(x => x.classList.toggle("active", x === t));
+    document.querySelectorAll(".lib-subpane").forEach(p => { p.hidden = p.dataset.ltab !== t.dataset.ltab; });
+    if (t.dataset.ltab === "install") $("#libQuery").focus();
+  }));
 $("#docsOpenExt").addEventListener("click", () => api("/api/open", { url: DOCS_URL }));
 document.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); upload(); }
