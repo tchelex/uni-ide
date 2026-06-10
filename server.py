@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import json
+import time
 import shutil
 import hashlib
 import threading
@@ -957,6 +958,122 @@ def libs_list():
             pass
     items.sort(key=lambda x: (x.get("name") or "").lower())
     return jsonify({"ok": ok, "libs": items, "log": err.strip()})
+
+
+# --------------------------------------------------------------------------- #
+# Маршруты — примеры из библиотек
+# --------------------------------------------------------------------------- #
+_EXAMPLES_CACHE = {"t": 0.0, "libs": None}
+_EXAMPLES_TTL = 120  # сек; список меняется только при установке библиотек
+
+
+def _scan_examples_dir(exdir):
+    """[{name, path}] для папки examples библиотеки.
+    Пример — подпапка с .ino внутри; поддерживаем 1 уровень группировки
+    (examples/Группа/Пример/Пример.ino), как в Arduino IDE."""
+    out = []
+
+    def walk(d, prefix, depth):
+        try:
+            entries = sorted(os.listdir(d), key=str.lower)
+        except Exception:
+            return
+        for e in entries:
+            p = os.path.join(d, e)
+            if not os.path.isdir(p):
+                continue
+            try:
+                has_ino = any(f.lower().endswith(".ino") for f in os.listdir(p))
+            except Exception:
+                continue
+            label = (prefix + " / " + e) if prefix else e
+            if has_ino:
+                out.append({"name": label, "path": p})
+            elif depth < 2:
+                walk(p, label, depth + 1)
+
+    walk(exdir, "", 0)
+    return out
+
+
+@app.route("/api/examples", methods=["GET"])
+def examples_list():
+    """Примеры всех установленных библиотек (включая встроенные в ядро ESP32),
+    сгруппированные по библиотеке. Пользовательские библиотеки — первыми."""
+    now = time.time()
+    if _EXAMPLES_CACHE["libs"] is not None and now - _EXAMPLES_CACHE["t"] < _EXAMPLES_TTL \
+            and not request.args.get("refresh"):
+        return jsonify({"ok": True, "libs": _EXAMPLES_CACHE["libs"]})
+
+    ok, out, _ = run_cli(["lib", "list", "--all", "--fqbn", FQBN, "--format", "json"])
+    libs = []
+    if ok and out.strip():
+        try:
+            data = json.loads(out)
+            rows = data if isinstance(data, list) else data.get("installed_libraries", [])
+            for row in rows:
+                lib = row.get("library", row)
+                name = lib.get("name") or ""
+                idir = lib.get("install_dir") or lib.get("source_dir") or ""
+                loc = (lib.get("location") or "").lower()
+                # arduino-cli сам отдаёт пути примеров; если нет — сканируем сами
+                exs = [{"name": os.path.basename(os.path.normpath(p)), "path": p}
+                       for p in (lib.get("examples") or []) if p]
+                if not exs and idir:
+                    exs = _scan_examples_dir(os.path.join(idir, "examples"))
+                if not exs:
+                    continue
+                exs.sort(key=lambda x: x["name"].lower())
+                libs.append({
+                    "lib": name or os.path.basename(idir or "?"),
+                    "user": ("user" in loc or "sketchbook" in loc),
+                    "examples": exs,
+                })
+        except Exception:
+            pass
+    libs.sort(key=lambda L: (0 if L["user"] else 1, L["lib"].lower()))
+    _EXAMPLES_CACHE["t"] = now
+    _EXAMPLES_CACHE["libs"] = libs
+    return jsonify({"ok": True, "libs": libs})
+
+
+@app.route("/api/example/open", methods=["POST"])
+def example_open():
+    """Открывает пример КАК КОПИЮ в Uni_Sketches (оригинал в библиотеке
+    остаётся нетронутым — автосохранение пишет уже в копию)."""
+    body = request.json or {}
+    src = (body.get("path") or "").strip()
+    if not src:
+        return jsonify({"ok": False, "log": "Не указан путь примера."})
+    src = os.path.abspath(src)
+    src_dir = src if os.path.isdir(src) else os.path.dirname(src)
+    src_ino = resolve_sketch_path(src_dir)
+    if not src_ino or not os.path.exists(src_ino):
+        return jsonify({"ok": False, "log": "Пример не найден."})
+
+    base = safe_sketch_name(sketch_name_of(src_ino)) or "example"
+    os.makedirs(SKETCHBOOK, exist_ok=True)
+    name, n = base, 1
+    while os.path.exists(os.path.join(SKETCHBOOK, name)):
+        n += 1
+        name = f"{base}{n}"
+    dst_dir = os.path.join(SKETCHBOOK, name)
+
+    try:
+        # копируем папку целиком: рядом с .ino могут лежать .h/.cpp/данные
+        shutil.copytree(src_dir, dst_dir)
+        old_ino = os.path.join(dst_dir, os.path.basename(src_ino))
+        dst_ino = os.path.join(dst_dir, name + ".ino")
+        if os.path.normcase(old_ino) != os.path.normcase(dst_ino):
+            os.rename(old_ino, dst_ino)
+        with open(dst_ino, "r", encoding="utf-8", errors="replace") as fh:
+            code = fh.read()
+    except Exception as e:  # noqa: BLE001
+        shutil.rmtree(dst_dir, ignore_errors=True)
+        return jsonify({"ok": False, "log": f"Не удалось скопировать пример: {e}"})
+
+    add_recent(dst_ino)
+    return jsonify({"ok": True, "path": dst_ino, "name": name, "code": code})
 
 
 @app.route("/api/lib/search", methods=["POST"])

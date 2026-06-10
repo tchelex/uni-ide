@@ -255,6 +255,7 @@
   .toolbar-spacer { flex: 1; min-width: 12px; }
   /* ---------- editor search box ---------- */
   .editor-search {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 3px;
@@ -304,6 +305,47 @@
     padding: 0;
   }
   .search-nav:hover { background: var(--panel-3); color: var(--text); }
+  .search-nav.on { background: var(--panel-3); color: var(--accent); }
+  /* ---------- replace panel (под полем поиска) ---------- */
+  .replace-pop {
+    display: none;
+    position: absolute;
+    top: calc(100% + 5px);
+    right: -1px;
+    z-index: 20;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+  }
+  .replace-pop.open { display: flex; }
+  .replace-pop input {
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    outline: none;
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--text);
+    width: 160px;
+    height: 24px;
+    padding: 0 7px;
+  }
+  .replace-pop input:focus { border-color: var(--accent); }
+  .rp-btn {
+    border: 1px solid var(--line);
+    background: var(--panel-3);
+    border-radius: 4px;
+    height: 24px;
+    padding: 0 9px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .rp-btn:hover { border-color: var(--accent); color: var(--accent); }
   /* selected-word occurrences */
   .cm-matchhighlight { background: rgba(90, 200, 205, 0.30); border-radius: 2px; }
   /* search matches */
@@ -683,6 +725,62 @@
   .recent-item.missing { opacity: 0.45; cursor: default; }
   .recent-item.missing:hover { background: transparent; }
   .recent-empty { font-size: 12px; color: var(--muted); padding: 6px 12px; font-style: italic; }
+  /* ---------- подменю «Примеры» ---------- */
+  .menu-item.has-sub { position: relative; }
+  .menu-item.has-sub .sub-arrow { margin-left: auto; color: var(--muted); font-size: 10px; }
+  .submenu {
+    display: none;
+    position: absolute;
+    left: 100%;
+    top: -6px;
+    min-width: 280px;
+    max-width: 380px;
+    max-height: 62vh;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    padding: 5px;
+    z-index: 60;
+  }
+  .menu-item.has-sub:hover > .submenu,
+  .menu-item.has-sub.open > .submenu { display: block; }
+  .ex-lib {
+    display: flex;
+    align-items: center;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .ex-lib::before {
+    content: "▸";
+    margin-right: 7px;
+    font-size: 10px;
+    color: var(--muted);
+    transition: transform .12s;
+  }
+  .ex-group.open .ex-lib::before { transform: rotate(90deg); }
+  .ex-lib:hover { background: var(--panel-3); }
+  .ex-lib .ex-cnt { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--muted); font-weight: 400; }
+  .ex-items { display: none; }
+  .ex-group.open .ex-items { display: block; }
+  .ex-item {
+    font-size: 12.5px;
+    padding: 5px 10px 5px 27px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ex-item:hover { background: var(--panel-3); color: var(--accent); }
+  .ex-empty { font-size: 12px; color: var(--muted); padding: 6px 10px; font-style: italic; }
 
   /* ---------- modal ---------- */
   .modal-overlay {
@@ -833,6 +931,9 @@
     <div class="menu-list" id="fileMenuList">
       <div class="menu-item" data-act="new">Новый проект<span class="hint">Ctrl+N</span></div>
       <div class="menu-item" data-act="open">Открыть проект…<span class="hint">Ctrl+O</span></div>
+      <div class="menu-item has-sub" id="examplesItem">Примеры<span class="sub-arrow">▸</span>
+        <div class="submenu" id="examplesMenu"><div class="ex-empty">загрузка…</div></div>
+      </div>
       <div class="menu-sep"></div>
       <div class="menu-item" data-act="saveas">Сохранить как…<span class="hint">Ctrl+S</span></div>
       <div class="menu-sep"></div>
@@ -890,7 +991,13 @@
         <span class="search-count" id="searchCount"></span>
         <button class="search-nav" id="searchPrev" title="Назад (Shift+Enter)" tabindex="-1">▲</button>
         <button class="search-nav" id="searchNext" title="Вперёд (Enter)" tabindex="-1">▼</button>
+        <button class="search-nav" id="replaceToggle" title="Замена (Ctrl+H)" tabindex="-1">⇄</button>
         <button class="search-nav" id="searchClose" title="Очистить (Esc)" tabindex="-1">✕</button>
+        <div class="replace-pop" id="replacePanel">
+          <input type="text" id="replaceInput" placeholder="Заменить на…" spellcheck="false" autocomplete="off" />
+          <button class="rp-btn" id="replaceOneBtn" title="Заменить текущее совпадение (Enter)">Заменить</button>
+          <button class="rp-btn" id="replaceAllBtn" title="Заменить все совпадения">Все</button>
+        </div>
       </div>
     </div>
 
@@ -1013,6 +1120,8 @@ const editor = CodeMirror.fromTextArea($("#code"), {
     "Ctrl-Space": (cm) => cm.showHint({ hint: uniHint, completeSingle: false }),
     "Ctrl-F": () => focusSearch(),
     "Cmd-F": () => focusSearch(),
+    "Ctrl-H": () => openReplace(),
+    "Cmd-Alt-F": () => openReplace(),
   },
 });
 
@@ -1469,17 +1578,22 @@ const fileMenuList = $("#fileMenuList");
 function closeMenu() {
   fileMenuList.classList.remove("open");
   fileMenuBtn.classList.remove("open");
+  $("#examplesItem").classList.remove("open");
 }
 fileMenuBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   const open = fileMenuList.classList.toggle("open");
   fileMenuBtn.classList.toggle("open", open);
-  if (open) renderRecent();
+  if (open) { renderRecent(); loadExamples(); }
 });
 fileMenuList.addEventListener("click", (e) => e.stopPropagation());
 document.addEventListener("click", closeMenu);
-fileMenuList.querySelectorAll(".menu-item").forEach(it =>
+fileMenuList.querySelectorAll(".menu-item[data-act]").forEach(it =>
   it.addEventListener("click", () => { closeMenu(); handleMenu(it.dataset.act); }));
+// «Примеры» — подменю: клик раскрывает/сворачивает (наведение тоже работает)
+$("#examplesItem").addEventListener("click", function () {
+  this.classList.toggle("open");
+});
 
 async function saveCurrent(msg) {
   if (!currentPath) return;
@@ -1576,6 +1690,56 @@ async function renderRecent() {
     }
     box.appendChild(row);
   });
+}
+
+/* ---------- примеры из библиотек ---------- */
+let _examplesLoaded = false;
+
+async function openExample(ex) {
+  closeMenu();
+  await saveCurrent();
+  const r = await api("/api/example/open", { path: ex.path });
+  if (!r || !r.ok) { setStatus((r && r.log) || "не удалось открыть пример"); return; }
+  setActiveSketch(r.path, r.name, r.code);
+  setStatus("открыт пример: " + r.name + " (копия)");
+}
+
+async function loadExamples(force) {
+  if (_examplesLoaded && !force) return;
+  const box = $("#examplesMenu");
+  const r = await api("/api/examples");
+  const libs = (r && r.libs) || [];
+  if (!libs.length) {
+    box.innerHTML = `<div class="ex-empty">примеры не найдены</div>`;
+    _examplesLoaded = true;
+    return;
+  }
+  box.innerHTML = "";
+  libs.forEach((L, i) => {
+    const g = document.createElement("div");
+    // первую пользовательскую библиотеку (обычно UNI) раскрываем сразу
+    g.className = "ex-group" + (i === 0 && L.user ? " open" : "");
+    const h = document.createElement("div");
+    h.className = "ex-lib";
+    h.innerHTML = `<span></span><span class="ex-cnt"></span>`;
+    h.firstChild.textContent = L.lib;
+    h.lastChild.textContent = L.examples.length;
+    h.addEventListener("click", (e) => { e.stopPropagation(); g.classList.toggle("open"); });
+    g.appendChild(h);
+    const items = document.createElement("div");
+    items.className = "ex-items";
+    L.examples.forEach(ex => {
+      const it = document.createElement("div");
+      it.className = "ex-item";
+      it.textContent = ex.name;
+      it.title = "Открыть копию примера: " + ex.path;
+      it.addEventListener("click", (e) => { e.stopPropagation(); openExample(ex); });
+      items.appendChild(it);
+    });
+    g.appendChild(items);
+    box.appendChild(g);
+  });
+  _examplesLoaded = true;
 }
 
 /* ---------- tabs ---------- */
@@ -1785,6 +1949,9 @@ document.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
     if (!e.defaultPrevented) { e.preventDefault(); focusSearch(); }
   }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "h") {
+    if (!e.defaultPrevented) { e.preventDefault(); openReplace(); }
+  }
   if (e.key === "Escape") closeModal();
 });
 
@@ -1899,6 +2066,7 @@ function closeSearch() {
   _clearSearchMarks();
   _searchHits = []; _searchIdx = -1;
   $("#editorSearch").classList.remove("active");
+  closeReplace();
   _updateSearchCount();
   editor.focus();
   refreshWordHighlight();
@@ -1918,6 +2086,54 @@ $("#searchClose").addEventListener("click", closeSearch);
 editor.on("change", _debounce(() => {
   if ($("#searchInput").value) runSearch($("#searchInput").value, true);
 }, 200));
+
+/* ---------- замена (Ctrl+H) ---------- */
+function openReplace() {
+  focusSearch();                                  // подхватит выделенное слово как запрос
+  $("#replacePanel").classList.add("open");
+  $("#replaceToggle").classList.add("on");
+  // если запрос уже есть — сразу в поле замены, иначе сначала ввод запроса
+  if ($("#searchInput").value) { $("#replaceInput").focus(); $("#replaceInput").select(); }
+}
+function closeReplace() {
+  $("#replacePanel").classList.remove("open");
+  $("#replaceToggle").classList.remove("on");
+}
+function replaceOne() {
+  const q = $("#searchInput").value;
+  if (!q || _searchIdx < 0 || !_searchHits.length) return;
+  const rep = $("#replaceInput").value;
+  const h = _searchHits[_searchIdx];
+  const fromIdx = editor.indexFromPos(h.from);
+  editor.replaceRange(rep, h.from, h.to);
+  // курсор — за конец вставленного текста, чтобы поиск ушёл к СЛЕДУЮЩЕМУ совпадению
+  editor.setCursor(editor.posFromIndex(fromIdx + rep.length));
+  runSearch(q, false);
+}
+function replaceAllFn() {
+  const q = $("#searchInput").value;
+  if (!q || !_searchHits.length) return;
+  const rep = $("#replaceInput").value;
+  const n = _searchHits.length;
+  // заменяем с конца к началу — позиции более ранних совпадений не сдвигаются
+  editor.operation(() => {
+    for (let i = _searchHits.length - 1; i >= 0; i--) {
+      editor.replaceRange(rep, _searchHits[i].from, _searchHits[i].to);
+    }
+  });
+  runSearch(q, false);
+  setStatus("заменено: " + n);
+}
+$("#replaceToggle").addEventListener("click", () => {
+  if ($("#replacePanel").classList.contains("open")) closeReplace();
+  else openReplace();
+});
+$("#replaceOneBtn").addEventListener("click", () => { replaceOne(); $("#replaceInput").focus(); });
+$("#replaceAllBtn").addEventListener("click", replaceAllFn);
+$("#replaceInput").addEventListener("keydown", e => {
+  if (e.key === "Enter")       { e.preventDefault(); replaceOne(); }
+  else if (e.key === "Escape") { e.preventDefault(); closeReplace(); editor.focus(); }
+});
 
 /* ---------- editor toolbar ---------- */
 let fontSize = parseInt(localStorage.getItem("uni-font-size") || "14");
