@@ -8,3 +8,11 @@
 *.png   binary
 *.woff2 binary
 *.zip   binary
+*.sys   binary
+*.SYS   binary
+*.dll   binary
+*.DLL   binary
+*.cat   binary
+*.CAT   binary
+*.inf   binary
+*.INF   binary

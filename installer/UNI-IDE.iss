@@ -73,8 +73,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Весь бандл (UNI-IDE.exe, _internal, index.html, vendor, arduino-cli, arduino-data, ...)
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
-; Драйвер CH340 — ставится опционально (галочка на последней странице).
-Source: "{#RepoDir}\CH341SER.EXE"; DestDir: "{app}\drivers"; Flags: ignoreversion
+; Драйвер CH340: INF-пакет для тихой установки через pnputil (галочка в конце)
+; + CH341SER.EXE как запасной вариант для ручной установки.
+Source: "{#RepoDir}\drivers\CH341SER\*"; DestDir: "{app}\drivers\CH341SER"; Flags: ignoreversion
+Source: "{#RepoDir}\drivers\CH341SER.EXE"; DestDir: "{app}\drivers"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"
@@ -82,9 +84,10 @@ Name: "{group}\Удалить {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Run]
-; Галочка на финальной странице (по умолчанию ВЫКЛ): установка драйвера CH340.
-; CH341SER.EXE сам запросит права администратора при установке драйвера.
-Filename: "{app}\drivers\CH341SER.EXE"; Description: "Установить драйвер CH340 (нужен, чтобы ПК увидел плату ESP32)"; Flags: postinstall skipifsilent unchecked
+; Галочка на финальной странице (по умолчанию ВЫКЛ): установка драйвера CH340
+; ЧЕРЕЗ КОМАНДНУЮ СТРОКУ (pnputil), без GUI-инсталлятора WCH. Окно UAC
+; появится только на эту команду; ученику не нужно ничего нажимать в мастере.
+Filename: "{sys}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\CH341SER\CH341SER.INF"" /install"; WorkingDir: "{app}\drivers\CH341SER"; Description: "Установить драйвер CH340 (нужен, чтобы ПК увидел плату ESP32)"; Flags: postinstall skipifsilent unchecked shellexec waituntilterminated; Verb: runas
 ; Галочка «Запустить UNI IDE» (по умолчанию ВКЛ).
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
