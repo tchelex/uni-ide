@@ -978,7 +978,6 @@
   <button class="btn icon ghost" id="refreshBtn" title="Обновить порты">↻</button>
   <button class="btn ghost" id="verifyBtn" title="Только компиляция">✓ Проверить</button>
   <button class="btn primary" id="uploadBtn" title="Скомпилировать и прошить">▶ Загрузить</button>
-  <button class="btn ghost" id="monBtn" title="Serial-монитор">◷ Монитор</button>
 </header>
 
 <div id="progressWrap"><div id="progressBar"></div></div>
@@ -1815,7 +1814,6 @@ function startMonUI() {
   monOn = true;
   $("#serialToggle").textContent = "Отключить";
   $("#serialToggle").classList.add("active");
-  $("#monBtn").classList.add("active");
   $("#ledSerial").className = "led on";
   switchPane("serial");
   monPoll = setInterval(async () => {
@@ -1836,7 +1834,6 @@ function stopMonUI() {
   clearInterval(monPoll);
   $("#serialToggle").textContent = "Подключить";
   $("#serialToggle").classList.remove("active");
-  $("#monBtn").classList.remove("active");
   $("#ledSerial").className = "led off";
 }
 async function serialSend() {
@@ -1976,7 +1973,6 @@ $("#consoleCopyBtn").addEventListener("click", function () {
 });
 
 $("#consoleClearBtn").addEventListener("click", clearConsole);
-$("#monBtn").addEventListener("click", serialToggle);
 $("#serialToggle").addEventListener("click", serialToggle);
 $("#serialClear").addEventListener("click", () => $("#serialLog").innerHTML = "");
 $("#serialSendBtn").addEventListener("click", serialSend);
