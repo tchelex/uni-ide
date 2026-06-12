@@ -1103,12 +1103,27 @@ def libs_search():
 
 @app.route("/api/lib/install", methods=["POST"])
 def libs_install():
+    """Установка библиотеки. Для уже установленной ставит свежую версию
+    (этим же маршрутом работает кнопка «обновить»)."""
     name = (request.json or {}).get("name", "").strip()
     if not name:
         return jsonify({"ok": False, "log": "Не указано имя библиотеки."})
     ok, out, err = run_cli(["lib", "install", name])
     if ok:
         # примеры новой библиотеки должны сразу появиться в меню «Примеры»
+        _EXAMPLES_CACHE["libs"] = None
+    return jsonify({"ok": ok, "log": (out + err).strip()})
+
+
+@app.route("/api/lib/uninstall", methods=["POST"])
+def libs_uninstall():
+    """Удаление установленной библиотеки (только пользовательские;
+    встроенные в ядро ESP32 удалить нельзя — arduino-cli вернёт ошибку)."""
+    name = (request.json or {}).get("name", "").strip()
+    if not name:
+        return jsonify({"ok": False, "log": "Не указано имя библиотеки."})
+    ok, out, err = run_cli(["lib", "uninstall", name])
+    if ok:
         _EXAMPLES_CACHE["libs"] = None
     return jsonify({"ok": ok, "log": (out + err).strip()})
 

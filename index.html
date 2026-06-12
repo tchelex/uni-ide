@@ -649,6 +649,10 @@
     padding: 4px 10px; cursor: pointer; white-space: nowrap;
   }
   .mini-btn:hover { background: var(--accent-dim); }
+  .mini-btn:disabled { opacity: 0.55; cursor: default; }
+  .mini-btn.danger { background: #c0392b; }
+  .mini-btn.danger:hover { background: #a93226; }
+  .lib-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
   /* enriched installed-library cards */
   .lib-item .meta {
@@ -1919,33 +1923,65 @@ function renderInstalled() {
     box.appendChild(d);
   });
 }
+let _lastSearch = [];   // последние результаты поиска — для перерисовки кнопок
+
+function _installedVersionOf(name) {
+  const n = (name || "").toLowerCase();
+  const lib = _installedLibs.find(l => (l.name || "").toLowerCase() === n);
+  return lib ? (lib.version || "?") : null;
+}
+
 async function libSearch() {
   const q = $("#libQuery").value.trim();
   if (!q) return;
   const box = $("#libResults");
   box.innerHTML = "<div class='lib-item desc'>поиск…</div>";
   const r = await api("/api/lib/search", { q });
+  _lastSearch = (r && r.results) || [];
+  renderSearchResults();
+}
+
+function renderSearchResults() {
+  const box = $("#libResults");
   box.innerHTML = "";
-  if (!r.results.length) { box.innerHTML = "<div class='lib-item desc'>ничего не найдено</div>"; return; }
-  r.results.forEach(l => {
+  if (!_lastSearch.length) { box.innerHTML = "<div class='lib-item desc'>ничего не найдено</div>"; return; }
+  _lastSearch.forEach(l => {
+    const inst = _installedVersionOf(l.name);          // версия, если уже установлена
+    const updatable = inst && l.version && inst !== l.version;
     const d = document.createElement("div");
     d.className = "lib-item";
+    const btns = !inst
+      ? `<button class="mini-btn" data-a="install">установить</button>`
+      : (updatable ? `<button class="mini-btn" data-a="update" title="Установлена v${esc(inst)}, доступна v${esc(l.version)}">обновить</button>` : "") +
+        `<button class="mini-btn danger" data-a="remove">удалить</button>`;
     d.innerHTML = `
       <div class="row">
-        <div class="name">${l.name} <span>v${l.version}</span></div>
-        <button class="mini-btn">установить</button>
+        <div class="name">${esc(l.name)} <span>v${esc(l.version)}</span>` +
+          (inst ? ` <span class="lib-chip">установлена v${esc(inst)}</span>` : "") +
+        `</div>
+        <div class="lib-actions">${btns}</div>
       </div>
-      <div class="desc">${l.sentence || ""}</div>`;
-    d.querySelector(".mini-btn").addEventListener("click", async (ev) => {
-      ev.target.textContent = "…"; ev.target.disabled = true;
-      const res = await api("/api/lib/install", { name: l.name });
-      ev.target.textContent = res.ok ? "✓ готово" : "ошибка";
-      if (res.ok) {
-        loadInstalled();
-        _examplesLoaded = false;   // примеры библиотеки появятся в «Файл → Примеры»
-        setStatus("библиотека установлена: " + l.name);
+      <div class="desc">${esc(l.sentence || "")}</div>`;
+    d.querySelectorAll(".mini-btn").forEach(b => b.addEventListener("click", async (ev) => {
+      const act = ev.target.dataset.a;
+      ev.target.textContent = "…";
+      d.querySelectorAll(".mini-btn").forEach(x => x.disabled = true);
+      const res = act === "remove"
+        ? await api("/api/lib/uninstall", { name: l.name })
+        : await api("/api/lib/install",   { name: l.name });   // install и update — одно действие
+      if (res && res.ok) {
+        await loadInstalled();          // обновит _installedLibs и подсказки
+        _examplesLoaded = false;        // меню «Примеры» перечитает список
+        setStatus(act === "remove" ? "библиотека удалена: " + l.name
+                : act === "update" ? "библиотека обновлена: " + l.name
+                :                    "библиотека установлена: " + l.name);
+        renderSearchResults();          // кнопки перерисуются по новому состоянию
+      } else {
+        ev.target.textContent = "ошибка";
+        ev.target.title = (res && res.log) || "";
+        d.querySelectorAll(".mini-btn").forEach(x => x.disabled = false);
       }
-    });
+    }));
     box.appendChild(d);
   });
 }
