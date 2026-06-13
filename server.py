@@ -1078,27 +1078,49 @@ def example_open():
     return jsonify({"ok": True, "path": dst_ino, "name": name, "code": code})
 
 
+def _parse_lib_search(out):
+    results = []
+    try:
+        data = json.loads(out)
+        rows = data.get("libraries", data if isinstance(data, list) else [])
+        for row in rows[:30]:
+            latest = row.get("latest", {})
+            results.append({
+                "name": row.get("name"),
+                "version": latest.get("version", ""),
+                "sentence": latest.get("sentence", ""),
+            })
+    except Exception:
+        pass
+    return results
+
+
 @app.route("/api/lib/search", methods=["POST"])
 def libs_search():
     q = (request.json or {}).get("q", "").strip()
     if not q:
         return jsonify({"ok": False, "results": [], "log": "Пустой запрос."})
+
     ok, out, err = run_cli(["lib", "search", q, "--format", "json"])
-    results = []
-    if ok and out.strip():
-        try:
-            data = json.loads(out)
-            rows = data.get("libraries", data if isinstance(data, list) else [])
-            for row in rows[:30]:
-                latest = row.get("latest", {})
-                results.append({
-                    "name": row.get("name"),
-                    "version": latest.get("version", ""),
-                    "sentence": latest.get("sentence", ""),
-                })
-        except Exception:
-            pass
-    return jsonify({"ok": ok, "results": results, "log": err.strip()})
+    results = _parse_lib_search(out) if ok else []
+
+    # Каталог библиотек отсутствует/устарел → поиск падает (или пуст).
+    # Пробуем один раз скачать каталог и повторить (нужен интернет один раз).
+    index_missing = (not ok) or ("index" in (err or "").lower())
+    if index_missing and not results:
+        up_ok, _, up_err = run_cli(["lib", "update-index"])
+        if up_ok:
+            ok, out, err = run_cli(["lib", "search", q, "--format", "json"])
+            results = _parse_lib_search(out) if ok else []
+        else:
+            err = (err or "") + "\n" + (up_err or "")
+
+    log = (err or "").strip()
+    if not ok and not log:
+        log = "Не удалось получить каталог библиотек."
+    # подсказка для UI: проблема именно с каталогом/сетью, а не «нет совпадений»
+    needs_net = (not ok) or (index_missing and not results)
+    return jsonify({"ok": ok, "results": results, "log": log, "needs_net": needs_net})
 
 
 @app.route("/api/lib/install", methods=["POST"])

@@ -653,6 +653,12 @@
   .mini-btn.danger { background: #c0392b; }
   .mini-btn.danger:hover { background: #a93226; }
   .lib-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .lib-err-log {
+    margin-top: 6px; padding: 6px 8px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--err);
+    background: #fdeceb; border-radius: 4px;
+    white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: auto;
+  }
 
   /* enriched installed-library cards */
   .lib-item .meta {
@@ -1931,6 +1937,8 @@ function _installedVersionOf(name) {
   return lib ? (lib.version || "?") : null;
 }
 
+let _lastSearchMeta = {};   // {ok, needs_net, log} последнего ответа поиска
+
 async function libSearch() {
   const q = $("#libQuery").value.trim();
   if (!q) return;
@@ -1938,13 +1946,27 @@ async function libSearch() {
   box.innerHTML = "<div class='lib-item desc'>поиск…</div>";
   const r = await api("/api/lib/search", { q });
   _lastSearch = (r && r.results) || [];
+  _lastSearchMeta = { ok: r && r.ok, needs_net: r && r.needs_net, log: (r && r.log) || "" };
   renderSearchResults();
 }
 
 function renderSearchResults() {
   const box = $("#libResults");
   box.innerHTML = "";
-  if (!_lastSearch.length) { box.innerHTML = "<div class='lib-item desc'>ничего не найдено</div>"; return; }
+  if (!_lastSearch.length) {
+    // отличаем «нет каталога / нужен интернет» от «нет совпадений»
+    if (_lastSearchMeta.needs_net || _lastSearchMeta.ok === false) {
+      box.innerHTML =
+        `<div class="lib-item desc">Не удалось получить каталог библиотек.<br>` +
+        `Чтобы искать и устанавливать библиотеки, нужен <b>интернет</b> ` +
+        `(каталог скачивается один раз, дальше работает из кэша).` +
+        (_lastSearchMeta.log ? `<div class="lib-err-log">${esc(_lastSearchMeta.log)}</div>` : "") +
+        `</div>`;
+    } else {
+      box.innerHTML = "<div class='lib-item desc'>ничего не найдено</div>";
+    }
+    return;
+  }
   _lastSearch.forEach(l => {
     const inst = _installedVersionOf(l.name);          // версия, если уже установлена
     const updatable = inst && l.version && inst !== l.version;

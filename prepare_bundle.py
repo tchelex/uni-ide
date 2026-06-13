@@ -101,6 +101,10 @@ def main():
     print("\nОбновляю индекс плат...")
     sh_retry(["core", "update-index"])
 
+    print("\nОбновляю каталог библиотек (для офлайн-поиска)...")
+    # без этого `lib search` на машине без интернета вернёт пустой список
+    sh_retry(["lib", "update-index"])
+
     print("\nУстанавливаю ядро ESP32 (это сотни МБ, подождите)...")
     sh_retry(["core", "install", "esp32:esp32"])
 
