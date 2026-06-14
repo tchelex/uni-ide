@@ -36,6 +36,20 @@
     --console-fg:#d4d4d4;
     --mono: "IBM Plex Mono", ui-monospace, monospace;
     --sans: "IBM Plex Sans", system-ui, sans-serif;
+    /* единая шкала скруглений, теней и плавности (освежение интерфейса) */
+    --r-sm: 6px;
+    --r-md: 8px;
+    --ease:  cubic-bezier(.4, 0, .2, 1);
+    --shadow-1: 0 1px 2px rgba(0,0,0,.05), 0 1px 3px rgba(0,0,0,.07);
+    --shadow-2: 0 6px 18px rgba(0,0,0,.12);
+    --focus: 0 0 0 3px rgba(0,135,138,.28);
+  }
+
+  /* доступные focus-кольца для клавиатурной навигации */
+  .btn:focus-visible, select:focus-visible, input:focus-visible,
+  .tab:focus-visible, .lib-tab:focus-visible, .menu-btn:focus-visible {
+    outline: none;
+    box-shadow: var(--focus);
   }
 
   * { box-sizing: border-box; }
@@ -49,6 +63,19 @@
     flex-direction: column;
     overflow: hidden;
   }
+
+  /* ---------- тонкие скроллбары (C) ---------- */
+  * { scrollbar-width: thin; scrollbar-color: rgba(130,130,130,.45) transparent; }
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(130,130,130,.42);
+    border-radius: 8px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(130,130,130,.7); background-clip: padding-box; }
+  ::-webkit-scrollbar-corner { background: transparent; }
 
   /* ---------- header ---------- */
   header {
@@ -130,7 +157,8 @@
     color: #ffffff;
     padding: 0 13px;
     cursor: pointer;
-    transition: background .12s;
+    transition: background .15s var(--ease), box-shadow .15s var(--ease),
+                transform .08s var(--ease), color .15s var(--ease);
     outline: none;
     white-space: nowrap;
   }
@@ -138,15 +166,21 @@
   select option { background: #fff; color: var(--text); }
   select:hover, .btn:hover { background: rgba(255,255,255,0.28); }
   .btn:active { transform: translateY(1px); }
-  .btn.icon { padding: 0 10px; border-radius: 50%; width: 32px; }
+  .btn.icon { padding: 0 10px; border-radius: 50%; width: 32px; display: inline-flex; align-items: center; justify-content: center; }
+  .btn svg { display: block; }
 
   .btn.primary {
     background: #ffffff;
     color: var(--accent);
     font-weight: 700;
     border-radius: 18px;
+    box-shadow: var(--shadow-1);
   }
-  .btn.primary:hover { background: #e8f7f7; }
+  .btn.primary:hover { background: #e8f7f7; box-shadow: var(--shadow-2); transform: translateY(-1px); }
+  .btn.primary:active { transform: translateY(0); }
+  /* иконки в кнопках шапки заголовка */
+  .btn .bi { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .btn.has-ico { display: inline-flex; align-items: center; gap: 7px; }
   .btn.ghost { background: rgba(255,255,255,0.15); }
   .btn.active { background: rgba(255,255,255,0.35); font-weight: 600; }
   .btn:disabled { opacity: .4; cursor: not-allowed; }
@@ -431,16 +465,28 @@
     flex-shrink: 0;
   }
   .tab {
+    position: relative;
     font-family: var(--sans);
     font-size: 12.5px;
-    padding: 10px 16px;
+    padding: 11px 16px;
     color: var(--muted);
     cursor: pointer;
-    border-bottom: 3px solid transparent;
     user-select: none;
+    transition: color .15s var(--ease);
+  }
+  .tab::after {                       /* анимированное подчёркивание */
+    content: "";
+    position: absolute;
+    left: 14px; right: 14px; bottom: 0;
+    height: 2.5px; border-radius: 2px 2px 0 0;
+    background: var(--accent);
+    transform: scaleX(0);
+    transition: transform .2s var(--ease);
   }
   .tab:hover { color: var(--text); }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .tab:hover::after { transform: scaleX(.4); opacity: .5; }
+  .tab.active { color: var(--accent); font-weight: 600; }
+  .tab.active::after { transform: scaleX(1); opacity: 1; }
 
   /* контейнер для всех панелей — заполняет оставшееся место */
   .panes-wrap {
@@ -651,10 +697,13 @@
   .lib-item {
     border: 1px solid var(--line);
     background: #fafafa;
-    border-radius: 4px;
+    border-radius: var(--r-sm);
     padding: 9px 11px;
     margin-bottom: 6px;
+    transition: border-color .15s var(--ease), box-shadow .15s var(--ease), background .15s var(--ease);
   }
+  .lib-item:hover { border-color: var(--accent-lt); box-shadow: var(--shadow-1); background: #fff; }
+  .lib-item.desc, .lib-item.desc:hover { background: #fafafa; border-color: var(--line); box-shadow: none; }
   .lib-item .name { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
   .lib-item .name span { color: var(--muted); font-weight: 400; }
   .lib-item .desc { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
@@ -719,20 +768,25 @@
     flex-shrink: 0;
   }
   .lib-tab {
+    position: relative;
     font-family: var(--sans); font-size: 12px; font-weight: 600;
     color: var(--muted);
-    padding: 7px 12px;
-    border: 1px solid transparent; border-bottom: none;
-    border-radius: 6px 6px 0 0;
+    padding: 9px 12px;
     cursor: pointer; user-select: none; white-space: nowrap;
+    transition: color .15s var(--ease);
   }
-  .lib-tab:hover { color: var(--text); background: var(--panel-3); }
-  .lib-tab.active {
-    color: var(--accent);
-    background: #fff;
-    border-color: var(--line);
-    margin-bottom: -1px;
+  .lib-tab::after {
+    content: "";
+    position: absolute;
+    left: 10px; right: 10px; bottom: -1px;
+    height: 2.5px; border-radius: 2px 2px 0 0;
+    background: var(--accent);
+    transform: scaleX(0);
+    transition: transform .2s var(--ease);
   }
+  .lib-tab:hover { color: var(--text); }
+  .lib-tab.active { color: var(--accent); }
+  .lib-tab.active::after { transform: scaleX(1); }
   .lib-subpane { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
   .lib-subpane[hidden] { display: none; }
 
@@ -901,19 +955,31 @@
 
   /* ---------- status bar ---------- */
   .status {
-    height: 26px;
+    height: 30px;
     flex-shrink: 0;
     background: var(--panel-3);
     border-top: 1px solid var(--line);
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 10px;
     padding: 0 14px;
     font-family: var(--mono);
     font-size: 11px;
     color: var(--muted);
+    overflow: hidden;
   }
-  .status .seg { display: flex; align-items: center; gap: 6px; }
+  .status .seg { display: flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }
+  #cliVer { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
+  /* индикаторы окружения как компактные пилюли */
+  .status .seg:has(.led) {
+    background: rgba(0,0,0,.045);
+    border: 1px solid var(--line-soft);
+    border-radius: 999px;
+    padding: 2px 10px 2px 8px;
+    transition: border-color .15s var(--ease), background .15s var(--ease);
+  }
+  .status .seg:has(.led.on)  { border-color: rgba(0,119,0,.35);  background: rgba(0,119,0,.06); }
+  .status .seg:has(.led.off) { border-color: rgba(204,41,41,.35); background: rgba(204,41,41,.06); }
   .status .led { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
   .status .led.on  { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
   .status .led.off { background: var(--err); }
@@ -1010,9 +1076,15 @@
 
   <div class="spin" id="spin"></div>
   <select id="portSel" title="COM-порт"><option>порты…</option></select>
-  <button class="btn icon ghost" id="refreshBtn" title="Обновить порты">↻</button>
-  <button class="btn ghost" id="verifyBtn" title="Только компиляция">✓ Проверить</button>
-  <button class="btn primary" id="uploadBtn" title="Скомпилировать и прошить">▶ Загрузить</button>
+  <button class="btn icon ghost" id="refreshBtn" title="Обновить порты">
+    <svg class="bi" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+  </button>
+  <button class="btn ghost has-ico" id="verifyBtn" title="Только компиляция">
+    <svg class="bi" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Проверить
+  </button>
+  <button class="btn primary has-ico" id="uploadBtn" title="Скомпилировать и прошить">
+    <svg class="bi" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Загрузить
+  </button>
 </header>
 
 <div id="progressWrap"><div id="progressBar"></div></div>
