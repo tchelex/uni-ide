@@ -130,23 +130,20 @@ def ac_save_enabled(names):
     except Exception:
         return False
 
-DEFAULT_CODE = """// UNI IDE — ESP32 Dev Module
-// Пример: мигание встроенным светодиодом
+DEFAULT_CODE = """#include <UNI.h>
 
-#define LED_PIN 2  // встроенный LED на большинстве ESP32 Dev Module
+UniBase robot;
+UniDev module;
 
 void setup() {
-  Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);
-  Serial.println("UNIBASE on ESP32 ready");
+  robot.begin("UNI");
+  // Ваш код, выполняется один раз.
+
 }
 
 void loop() {
-  digitalWrite(LED_PIN, HIGH);
-  Serial.println("blink ON");
-  delay(500);
-  digitalWrite(LED_PIN, LOW);
-  delay(500);
+  // Ваш код, выполняется в бесконечном цикле
+
 }
 """
 
