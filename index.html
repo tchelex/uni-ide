@@ -155,20 +155,45 @@
   main {
     flex: 1;
     display: grid;
-    grid-template-columns: 1fr 420px;
+    grid-template-columns: minmax(360px, 1fr) 6px var(--side-w, 420px);
     grid-template-rows: minmax(0, 1fr);
     min-height: 0;
   }
 
   .editor-wrap {
     position: relative;
-    border-right: 1px solid var(--line);
     min-width: 0;
     min-height: 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
   }
+
+  /* перетаскиваемый разделитель между редактором и правой панелью */
+  .col-resizer {
+    position: relative;
+    cursor: col-resize;
+    background: var(--line);
+    transition: background .12s;
+  }
+  .col-resizer::before {           /* расширенная зона захвата */
+    content: "";
+    position: absolute;
+    inset: 0 -4px;
+  }
+  .col-resizer::after {            /* точки-«грип» по центру */
+    content: "";
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 4px; height: 34px;
+    background: repeating-linear-gradient(var(--muted) 0 2px, transparent 2px 5px);
+    border-radius: 2px; opacity: .45;
+    pointer-events: none;
+    transition: opacity .12s;
+  }
+  .col-resizer:hover, .col-resizer.dragging { background: var(--accent); }
+  .col-resizer:hover::after, .col-resizer.dragging::after { opacity: 0; }
   .file-tab {
     font-family: var(--mono);
     font-size: 12px;
@@ -1036,6 +1061,9 @@
 
     <textarea id="code"></textarea>
   </section>
+
+  <div class="col-resizer" id="colResizer"
+       title="Потяните, чтобы изменить ширину панели (двойной клик — сброс)"></div>
 
   <aside class="side">
     <div class="tabs" id="sideTabs">
@@ -2047,6 +2075,55 @@ document.querySelectorAll(".lib-tab").forEach(t =>
     if (t.dataset.ltab === "install") $("#libQuery").focus();
   }));
 $("#docsOpenExt").addEventListener("click", () => api("/api/open", { url: DOCS_URL }));
+
+/* ---------- изменение ширины правой панели ---------- */
+(function initSideResize() {
+  const main = document.querySelector("main");
+  const rez  = $("#colResizer");
+  const side = document.querySelector(".side");
+  const KEY  = "uni.sideWidth";
+  const clamp = (w) => Math.max(260, Math.min(w, window.innerWidth - 380));
+
+  function setW(w) { main.style.setProperty("--side-w", clamp(w) + "px"); }
+
+  const saved = parseInt(localStorage.getItem(KEY) || "", 10);
+  if (saved) setW(saved);
+
+  let startX = 0, startW = 0, raf = 0;
+  function onMove(e) {
+    const w = clamp(startW + (startX - e.clientX));   // тянем влево → панель шире
+    main.style.setProperty("--side-w", w + "px");
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; editor.refresh(); });
+  }
+  function onUp() {
+    rez.classList.remove("dragging");
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    localStorage.setItem(KEY, Math.round(side.getBoundingClientRect().width));
+    editor.refresh();
+  }
+  rez.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = side.getBoundingClientRect().width;
+    rez.classList.add("dragging");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+  rez.addEventListener("dblclick", () => {            // сброс к ширине по умолчанию
+    main.style.removeProperty("--side-w");
+    localStorage.removeItem(KEY);
+    editor.refresh();
+  });
+  window.addEventListener("resize", () => {
+    const cur = side.getBoundingClientRect().width;
+    if (cur) setW(cur);                               // удержать в допустимых границах
+  });
+})();
 document.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); upload(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r") { e.preventDefault(); verify(); }
