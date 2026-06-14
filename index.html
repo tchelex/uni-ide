@@ -2129,7 +2129,11 @@ function _showCurrentHit(scroll) {
   _searchCur = editor.markText(h.from, h.to, { className: "cm-searchmatch-current" });
   if (scroll) { editor.scrollIntoView({ from: h.from, to: h.to }, 90); editor.setCursor(h.from); }
 }
-function runSearch(query, keepIdx) {
+// moveCursor: двигать ли курсор/прокрутку к текущему совпадению.
+// При вводе запроса/навигации — да; при пересчёте из-за правки кода — НЕТ
+// (иначе курсор «прыгает» на первое совпадение во время редактирования).
+function runSearch(query, keepIdx, moveCursor) {
+  if (moveCursor === undefined) moveCursor = true;
   _clearSearchMarks();
   _searchHits = [];
   if (!query) { _searchIdx = -1; _updateSearchCount(); return; }
@@ -2146,7 +2150,7 @@ function runSearch(query, keepIdx) {
   _searchMarks = _searchHits.map(h => editor.markText(h.from, h.to, { className: "cm-searchmatch" }));
   if (_searchHits.length) {
     if (!keepIdx || _searchIdx < 0 || _searchIdx >= _searchHits.length) _searchIdx = _nearestHit();
-    _showCurrentHit(true);
+    _showCurrentHit(moveCursor);
   } else {
     _searchIdx = -1;
   }
@@ -2189,9 +2193,9 @@ $("#searchNext").addEventListener("click", () => { nextMatch(1);  $("#searchInpu
 $("#searchPrev").addEventListener("click", () => { nextMatch(-1); $("#searchInput").focus(); });
 $("#searchClose").addEventListener("click", closeSearch);
 
-// при правке кода — пересчитать совпадения, если поиск активен
+// при правке кода — пересчитать совпадения, НЕ трогая курсор пользователя
 editor.on("change", _debounce(() => {
-  if ($("#searchInput").value) runSearch($("#searchInput").value, true);
+  if ($("#searchInput").value) runSearch($("#searchInput").value, true, false);
 }, 200));
 
 /* ---------- замена (Ctrl+H) ---------- */
