@@ -659,6 +659,16 @@
   }
   .serial-bar .btn:hover { background: var(--panel-3); }
   .serial-bar .btn.active { color: var(--accent); border-color: var(--accent); }
+  .serial-bar .serial-ts {
+    margin-left: auto;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; color: var(--muted);
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  .serial-bar .serial-ts input { accent-color: var(--accent); cursor: pointer; margin: 0; }
+  .serial-bar .serial-ts:hover { color: var(--text); }
+  /* метка времени перед строкой в Serial-логе (тёмный фон) */
+  #serialLog .ts { color: #6f8696; }
 
   /* libraries */
   .lib-pane { padding: 12px; gap: 10px; overflow: auto; background: #fff; }
@@ -1167,6 +1177,10 @@
           </select>
           <button class="btn ghost" id="serialToggle">Подключить</button>
           <button class="btn ghost icon" id="serialClear" title="Очистить">⌫</button>
+          <label class="serial-ts" title="Добавлять метку времени в начале каждой строки">
+            <input type="checkbox" id="serialTsChk" checked />
+            <span>Время</span>
+          </label>
         </div>
         <div class="log" id="serialLog"></div>
         <button class="log-scroll-btn" id="serialScrollBtn" title="Прокрутить вниз">↓</button>
@@ -1922,22 +1936,53 @@ async function serialToggle() {
 }
 function startMonUI() {
   monOn = true;
+  _serialAtLineStart = true;          // новая сессия — первая строка с меткой
   $("#serialToggle").textContent = "Отключить";
   $("#serialToggle").classList.add("active");
   $("#ledSerial").className = "led on";
   switchPane("serial");
   monPoll = setInterval(async () => {
     const r = await api("/api/monitor/read");
-    if (r.data) {
-      const el = $("#serialLog");
-      const span = document.createElement("span");
-      span.className = "rx";
-      span.textContent = r.data;
-      el.appendChild(span);
-      el.scrollTop = el.scrollHeight;
-    }
+    if (r.data) appendSerial(r.data);
     if (!r.on) stopMonUI();
   }, 300);
+}
+
+/* ---------- метки времени в Serial ---------- */
+let _serialTsOn = true;          // показывать метку времени перед строкой
+let _serialAtLineStart = true;   // курсор в начале строки → пора вставить метку
+
+function _serialTs() {
+  const d = new Date(), p = (n, l = 2) => String(n).padStart(l, "0");
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) + "." + p(d.getMilliseconds(), 3);
+}
+
+function appendSerial(text) {
+  const el = $("#serialLog");
+  if (!_serialTsOn) {
+    const s = document.createElement("span");
+    s.className = "rx"; s.textContent = text;
+    el.appendChild(s);
+  } else {
+    // метка ставится в начале каждой строки; строка может приходить частями
+    let i = 0;
+    while (i < text.length) {
+      if (_serialAtLineStart) {
+        const t = document.createElement("span");
+        t.className = "ts"; t.textContent = _serialTs() + "  ";
+        el.appendChild(t);
+        _serialAtLineStart = false;
+      }
+      const nl = text.indexOf("\n", i);
+      const end = nl === -1 ? text.length : nl + 1;
+      const s = document.createElement("span");
+      s.className = "rx"; s.textContent = text.slice(i, end);
+      el.appendChild(s);
+      if (nl !== -1) _serialAtLineStart = true;
+      i = end;
+    }
+  }
+  el.scrollTop = el.scrollHeight;
 }
 function stopMonUI() {
   monOn = false;
@@ -2132,7 +2177,17 @@ $("#consoleCopyBtn").addEventListener("click", function () {
 
 $("#consoleClearBtn").addEventListener("click", clearConsole);
 $("#serialToggle").addEventListener("click", serialToggle);
-$("#serialClear").addEventListener("click", () => $("#serialLog").innerHTML = "");
+$("#serialClear").addEventListener("click", () => { $("#serialLog").innerHTML = ""; _serialAtLineStart = true; });
+(function initSerialTs() {
+  const chk = $("#serialTsChk");
+  const saved = localStorage.getItem("uni.serialTs");
+  if (saved !== null) { _serialTsOn = saved === "1"; chk.checked = _serialTsOn; }
+  chk.addEventListener("change", () => {
+    _serialTsOn = chk.checked;
+    localStorage.setItem("uni.serialTs", _serialTsOn ? "1" : "0");
+    _serialAtLineStart = true;     // следующая строка начнётся с чистой метки
+  });
+})();
 $("#serialSendBtn").addEventListener("click", serialSend);
 $("#serialSend").addEventListener("keydown", e => { if (e.key === "Enter") serialSend(); });
 $("#libSearchBtn").addEventListener("click", libSearch);
