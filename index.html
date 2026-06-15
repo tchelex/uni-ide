@@ -1046,6 +1046,69 @@
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-thumb { background: #c0c0c0; border-radius: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ===================== 2D-симулятор ===================== */
+  .sim-toggle {
+    position: fixed; left: calc(58% - 16px); top: 50%;
+    transform: translateY(-50%);
+    width: 26px; height: 64px;
+    border: 1px solid var(--line); border-right: none;
+    border-radius: 8px 0 0 8px;
+    background: var(--panel); color: #fff;
+    font-size: 13px; cursor: pointer; z-index: 40;
+    box-shadow: var(--shadow-1);
+    transition: background .15s var(--ease), transform .25s var(--ease), left .25s var(--ease);
+  }
+  .sim-toggle:hover { background: var(--accent-dim); }
+  .sim-toggle.open { left: calc(62% - 25px); transform: translateY(-50%) rotate(180deg); }
+  @media (max-width: 1100px) { .sim-toggle.open { left: calc(100% - 360px - 25px); } }
+
+  .sim-panel {
+    position: fixed;
+    top: 60px; bottom: 34px; right: 0;
+    width: 38vw; min-width: 360px; max-width: 760px;
+    background: #0f1620;
+    border-left: 1px solid var(--accent-dim);
+    box-shadow: -10px 0 30px rgba(0,0,0,0.28);
+    display: flex; flex-direction: column;
+    transform: translateX(102%);
+    transition: transform .28s var(--ease);
+    z-index: 39;
+  }
+  .sim-panel.open { transform: translateX(0); }
+
+  .sim-bar {
+    display: flex; align-items: center; gap: 7px;
+    padding: 8px 10px; background: #141d28;
+    border-bottom: 1px solid #233040; flex-shrink: 0;
+  }
+  .sim-btn {
+    font-family: var(--sans); font-size: 12.5px; font-weight: 600;
+    height: 28px; padding: 0 11px;
+    border: 1px solid #2c3a49; border-radius: var(--r-sm);
+    background: #1d2937; color: #cfe1e6; cursor: pointer;
+    transition: background .12s var(--ease), border-color .12s var(--ease);
+  }
+  .sim-btn:hover { background: #26384a; border-color: var(--accent); }
+  .sim-btn.run { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .sim-btn.run:hover { background: var(--accent-dim); }
+  .sim-bar .sim-lbl { font-size: 11px; color: #8ea1ad; margin-left: 4px; }
+  .sim-bar select {
+    height: 28px; font-size: 12px; border-radius: var(--r-sm);
+    background: #1d2937; color: #cfe1e6; border: 1px solid #2c3a49; padding: 0 6px; cursor: pointer;
+  }
+  .sim-sep { width: 1px; height: 20px; background: #2c3a49; }
+  .sim-spacer { flex: 1; }
+
+  .sim-stage { flex: 1; min-height: 0; position: relative; }
+  #simCanvas { width: 100%; height: 100%; display: block; }
+  .sim-status {
+    flex-shrink: 0; padding: 5px 12px; font-size: 11.5px;
+    font-family: var(--mono); color: #8ea1ad;
+    background: #141d28; border-top: 1px solid #233040;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sim-status.err { color: #ff6b6b; }
 </style>
 </head>
 <body>
@@ -1233,6 +1296,34 @@
   </aside>
 </main>
 
+<!-- ===== 2D-симулятор: стрелка-открывашка + выезжающая панель ===== -->
+<button class="sim-toggle" id="simToggle" title="Симулятор (2D)">▶</button>
+<div class="sim-panel" id="simPanel">
+  <div class="sim-bar">
+    <button class="sim-btn run" id="simRun" title="Запустить скетч в симуляторе">▶ Старт</button>
+    <button class="sim-btn" id="simStop" title="Стоп">❚❚</button>
+    <button class="sim-btn" id="simReset" title="Сброс">↺</button>
+    <span class="sim-sep"></span>
+    <label class="sim-lbl">Сцена</label>
+    <select id="simScenario">
+      <option value="arena">Пусто</option>
+      <option value="line">Линия</option>
+      <option value="obstacles">Препятствия</option>
+    </select>
+    <label class="sim-lbl">Скорость</label>
+    <select id="simSpeed">
+      <option value="0.5">0.5×</option>
+      <option value="1" selected>1×</option>
+      <option value="2">2×</option>
+      <option value="4">4×</option>
+    </select>
+    <span class="sim-spacer"></span>
+    <button class="sim-btn" id="simClose" title="Свернуть">✕</button>
+  </div>
+  <div class="sim-stage"><canvas id="simCanvas"></canvas></div>
+  <div class="sim-status" id="simStatusLine">Нажмите «Старт» — скетч из редактора поедет в симуляторе.</div>
+</div>
+
 <div class="status" id="statusBar">
   <div class="seg"><span class="led" id="ledCli"></span>arduino-cli</div>
   <div class="seg"><span class="led" id="ledCore"></span>esp32 core</div>
@@ -1250,6 +1341,14 @@
 <script src="/vendor/codemirror/addon/edit/closebrackets.min.js"></script>
 <script src="/vendor/codemirror/addon/edit/matchbrackets.min.js"></script>
 <script src="/vendor/codemirror/addon/hint/show-hint.min.js"></script>
+<!-- 2D-симулятор (интерпретатор → кинематика → рендер → драйвер) -->
+<script src="/sim/cpp.js"></script>
+<script src="/sim/interp.js"></script>
+<script src="/sim/robot.js"></script>
+<script src="/sim/world.js"></script>
+<script src="/sim/render.js"></script>
+<script src="/sim/api.js"></script>
+<script src="/sim/sim.js"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const api = (url, body) =>
@@ -2482,6 +2581,50 @@ $("#themeSelect").addEventListener("change", function () {
 })();
 
 /* ---------- init ---------- */
+/* ---------- 2D-симулятор: выезжающая панель ---------- */
+(function initSim() {
+  const panel = $("#simPanel"), toggle = $("#simToggle"), canvas = $("#simCanvas");
+  if (!window.Sim || !canvas) { if (toggle) toggle.style.display = "none"; return; }
+  const sim = new Sim(canvas);
+  window._sim = sim;
+  let open = false;
+
+  sim.onSerial = (t) => { if (typeof appendSerial === "function") appendSerial(t); };
+  sim.onState = (st) => {
+    const el = $("#simStatusLine");
+    if (st.err) { el.textContent = "Ошибка: " + st.err; el.classList.add("err"); return; }
+    el.classList.remove("err");
+    el.textContent = (st.running ? "▶ выполняется" : st.phase === "done" ? "✓ завершено" : "остановлено")
+      + " · t=" + (st.clock / 1000).toFixed(1) + "с · сцена: " + scenName(st.scenario)
+      + (st.collided ? " · столкновение" : "");
+  };
+  const scenName = (n) => ({ arena: "пусто", line: "линия", obstacles: "препятствия" }[n] || n);
+
+  function setOpen(v) {
+    open = v;
+    panel.classList.toggle("open", v);
+    toggle.classList.toggle("open", v);
+    if (v) requestAnimationFrame(() => sim.resize());
+  }
+  toggle.addEventListener("click", () => setOpen(!open));
+  $("#simClose").addEventListener("click", () => setOpen(false));
+
+  $("#simRun").addEventListener("click", () => {
+    const el = $("#simStatusLine");
+    try { sim.load(editor.getValue()); }
+    catch (e) { el.textContent = "Ошибка разбора: " + (e.message || e); el.classList.add("err"); if (!open) setOpen(true); return; }
+    el.classList.remove("err");
+    if (!open) setOpen(true);
+    if (typeof switchPane === "function") switchPane("serial");   // вывод программы — в Serial
+    requestAnimationFrame(() => { sim.resize(); sim.run(); });
+  });
+  $("#simStop").addEventListener("click", () => sim.stop());
+  $("#simReset").addEventListener("click", () => sim.reset());
+  $("#simScenario").addEventListener("change", (e) => sim.setScenario(e.target.value));
+  $("#simSpeed").addEventListener("change", (e) => { sim.speed = parseFloat(e.target.value); });
+  window.addEventListener("resize", () => { if (open) sim.resize(); });
+})();
+
 (async function init() {
   await loadCode();
   await checkEnv();

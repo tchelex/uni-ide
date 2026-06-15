@@ -432,6 +432,12 @@ def vendor(filename):
     return send_from_directory(os.path.join(BASE, "vendor"), filename)
 
 
+@app.route("/sim/<path:filename>")
+def sim_files(filename):
+    """Модули 2D-симулятора (интерпретатор, кинематика, рендер, драйвер)."""
+    return send_from_directory(os.path.join(BASE, "sim"), filename)
+
+
 @app.route("/favicon.ico")
 def favicon():
     """Иконка приложения (для вкладки/окна браузера в режиме отката)."""
