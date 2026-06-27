@@ -1658,42 +1658,73 @@ const COMPILE_STAGES = [
   { re: /Leaving|Hash of data verified/i, pct: 98, label: "Проверка прошивки…" },
 ];
 
+// arduino-cli в нашем режиме НЕ печатает промежуточные строки во время
+// компиляции (вся работа молча, ~десятки секунд, потом сразу «Sketch uses»).
+// Поэтому бар двигаем РАВНОМЕРНО ПО ВРЕМЕНИ к ~88% за оценочную длительность
+// (калибруется по прошлой компиляции), а реальные сигналы (esptool %, готово)
+// только толкают его вперёд. Так прогресс «живой», как в Arduino IDE.
+let _progTimer = null, _progPct = 0, _progStart = 0;
+const PROG_KEY = "uni.compileMs";
+
+function setProgress(pct, label) {
+  _progPct = pct;
+  $("#progressBar").style.width = pct + "%";
+  if (label != null) $("#progressStage").textContent = label;
+}
+
 function progressStart(indeterminate = false) {
   const w = $("#progressWrap"), s = $("#progressStage");
   w.classList.add("active");
   s.classList.add("active");
+  clearInterval(_progTimer); _progTimer = null;
   if (indeterminate) {
     w.classList.add("indeterminate");
     $("#progressBar").style.width = "0%";
-  } else {
-    w.classList.remove("indeterminate");
-    setProgress(2, "Подготовка…");
+    return;
   }
+  w.classList.remove("indeterminate");
+  setProgress(2, "Компиляция…");
+  const est = Math.min(180000, Math.max(8000, parseInt(localStorage.getItem(PROG_KEY) || "40000")));
+  _progStart = Date.now();
+  _progTimer = setInterval(() => {
+    const t = Date.now() - _progStart;
+    const target = t < est
+      ? 2 + 86 * (t / est)                              // равномерно 2 → 88 % за est
+      : 88 + 8 * (1 - Math.exp(-(t - est) / 15000));    // дольше ожидаемого → мягкий доход к 96 %
+    if (target > _progPct) setProgress(target, null);   // только вперёд, подпись не трогаем
+  }, 150);
 }
-function setProgress(pct, label) {
-  $("#progressBar").style.width = pct + "%";
-  $("#progressStage").textContent = label || "";
-}
+
 function progressDone(ok) {
+  clearInterval(_progTimer); _progTimer = null;
+  if (ok && _progStart) {                               // самокалибровка: запомнить реальную длительность
+    const dur = Date.now() - _progStart;
+    if (dur > 1500) {
+      const prev = parseInt(localStorage.getItem(PROG_KEY) || "0") || dur;
+      localStorage.setItem(PROG_KEY, String(Math.round(prev * 0.4 + dur * 0.6)));
+    }
+  }
+  _progStart = 0;
   setProgress(ok ? 100 : 60, ok ? "Готово" : "Ошибка");
   setTimeout(() => {
     $("#progressWrap").classList.remove("active", "indeterminate");
     $("#progressStage").classList.remove("active");
     $("#progressBar").style.width = "0%";
     $("#progressStage").textContent = "";
+    _progPct = 0;
   }, 900);
 }
 
 function applyStage(line) {
   for (const s of COMPILE_STAGES) {
     if (s.re.test(line)) {
-      // Writing at 0x... (N %) — вытащить процент
-      if (s.label === "Запись прошивки…") {
+      if (s.label === "Запись прошивки…") {              // esptool: Writing at 0x… (N %) — реальный %
         const m = line.match(/\((\d+)\s*%\)/);
         const flash = m ? Math.round(90 + parseInt(m[1]) * 0.08) : 92;
-        setProgress(flash, `Запись прошивки… ${m ? m[1] + "%" : ""}`);
+        const lbl = `Запись прошивки… ${m ? m[1] + "%" : ""}`;
+        if (flash > _progPct) setProgress(flash, lbl); else $("#progressStage").textContent = lbl;
       } else if (s.pct !== null) {
-        setProgress(s.pct, s.label);
+        if (s.pct > _progPct) setProgress(s.pct, s.label); else $("#progressStage").textContent = s.label;
       }
       return;
     }
