@@ -1281,8 +1281,45 @@ const editor = CodeMirror.fromTextArea($("#code"), {
     "Cmd-F": () => focusSearch(),
     "Ctrl-H": () => openReplace(),
     "Cmd-Alt-F": () => openReplace(),
+    "Ctrl-/": (cm) => toggleLineComment(cm),
+    "Cmd-/": (cm) => toggleLineComment(cm),
   },
 });
+
+/* ---------- комментирование строк (Ctrl+/) ---------- */
+// Переключает «//» для текущей строки или всех строк выделения одним действием.
+// Если все непустые строки уже закомментированы — снимает комментарий, иначе
+// добавляет «// » на минимальном отступе блока. Пустые строки не трогает.
+function toggleLineComment(cm) {
+  const from = cm.getCursor("from"), to = cm.getCursor("to");
+  let start = from.line, end = to.line;
+  if (end > start && to.ch === 0) end--;          // выделение кончилось в начале строки — её не берём
+  const rows = [];
+  for (let i = start; i <= end; i++) rows.push({ n: i, text: cm.getLine(i) });
+  const nonBlank = rows.filter((r) => r.text.trim() !== "");
+  if (!nonBlank.length) return;
+  const allCommented = nonBlank.every((r) => /^\s*\/\//.test(r.text));
+  cm.operation(() => {
+    if (allCommented) {                            // снять комментарий
+      for (const r of rows) {
+        const m = /^(\s*)\/\/ ?/.exec(r.text);
+        if (m) cm.replaceRange("", { line: r.n, ch: m[1].length }, { line: r.n, ch: m[0].length });
+      }
+    } else {                                       // закомментировать на минимальном отступе
+      let min = Infinity;
+      for (const r of nonBlank) min = Math.min(min, r.text.match(/^\s*/)[0].length);
+      if (!isFinite(min)) min = 0;
+      for (const r of rows) {
+        if (r.text.trim() === "") continue;        // пустые строки пропускаем
+        cm.replaceRange("// ", { line: r.n, ch: min });
+      }
+    }
+  });
+  // сохранить выделение блока (чтобы повторный Ctrl+/ работал по тем же строкам)
+  if (cm.somethingSelected() || end > start) {
+    cm.setSelection({ line: start, ch: 0 }, { line: end, ch: cm.getLine(end).length });
+  }
+}
 
 /* ---------- code autocomplete (hints while typing) ---------- */
 
