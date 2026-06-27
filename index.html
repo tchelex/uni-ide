@@ -312,6 +312,16 @@
     background: var(--line);
   }
   .toolbar-spacer { flex: 1; min-width: 12px; }
+  .fmt-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 26px; padding: 0 10px;
+    font-family: var(--sans); font-size: 12px;
+    border: 1px solid var(--line); border-radius: var(--r-sm, 6px);
+    background: #fff; color: var(--text); cursor: pointer; white-space: nowrap;
+    transition: border-color .15s var(--ease), color .15s var(--ease), background .15s var(--ease);
+  }
+  .fmt-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--panel-3); }
+  .fmt-btn svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; }
   /* ---------- editor search box ---------- */
   .editor-search {
     position: relative;
@@ -1119,6 +1129,10 @@
         <span id="fontSizeLabel">14</span>
         <button id="fontInc" title="Увеличить">+</button>
       </div>
+      <div class="toolbar-sep"></div>
+      <button class="fmt-btn" id="formatBtn" title="Форматировать код: отступы и пробелы">
+        <svg viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="13" y2="12"/><line x1="4" y1="18" x2="17" y2="18"/></svg>Format
+      </button>
 
       <div class="toolbar-spacer"></div>
 
@@ -2500,6 +2514,76 @@ function applyFontSize(size) {
 
 $("#fontInc").addEventListener("click", () => applyFontSize(fontSize + 1));
 $("#fontDec").addEventListener("click", () => applyFontSize(fontSize - 1));
+
+/* ---------- форматирование кода (кнопка Format) ---------- */
+// Нормализация пробелов ТОЛЬКО в коде (строки/символы/комментарии не трогаем):
+//   «,»→«, »   «for(»→«for (»   «){»→«) {»   «}else»→«} else»
+// Операторы (=, <, * и т.п.) не трогаем — риск повредить код.
+function _formatSpacing(src) {
+  let out = "", i = 0; const n = src.length;
+  let inStr = false, inChar = false, inLine = false, inBlock = false;
+  let lastWord = "", lastSig = "";                         // в КОДЕ: последний идентификатор и значимый символ
+  const KW_PAREN = { if: 1, for: 1, while: 1, switch: 1, catch: 1 };
+  const KW_AFTER_BRACE = { else: 1, while: 1, catch: 1 };  // «}else»→«} else»
+  while (i < n) {
+    const c = src[i], c2 = src[i + 1];
+    if (inLine) { out += c; if (c === "\n") inLine = false; i++; continue; }
+    if (inBlock) { out += c; if (c === "*" && c2 === "/") { out += c2; i += 2; inBlock = false; } else i++; continue; }
+    if (inStr) { out += c; if (c === "\\") { out += (c2 || ""); i += 2; continue; } if (c === '"') inStr = false; i++; continue; }
+    if (inChar) { out += c; if (c === "\\") { out += (c2 || ""); i += 2; continue; } if (c === "'") inChar = false; i++; continue; }
+    if (c === "/" && c2 === "/") { inLine = true; out += c; i++; continue; }
+    if (c === "/" && c2 === "*") { inBlock = true; out += c; i++; continue; }
+    if (c === '"') { inStr = true; out += c; lastSig = '"'; lastWord = ""; i++; continue; }
+    if (c === "'") { inChar = true; out += c; lastSig = "'"; lastWord = ""; i++; continue; }
+    if (/[A-Za-z_]/.test(c)) {                              // идентификатор/ключевое слово
+      let w = ""; while (i < n && /[A-Za-z0-9_]/.test(src[i])) w += src[i++];
+      if (KW_AFTER_BRACE[w] && lastSig === "}" && out.slice(-1) !== " ") out += " ";
+      out += w; lastWord = w; lastSig = w[w.length - 1]; continue;
+    }
+    if (c === "(") {
+      if (KW_PAREN[lastWord] && lastSig === lastWord[lastWord.length - 1] && out.slice(-1) !== " ") out += " ";
+      out += "("; lastSig = "("; lastWord = ""; i++; continue;
+    }
+    if (c === "{") {
+      const elseLike = lastWord && /^(else|do|try)$/.test(lastWord) && lastSig === lastWord[lastWord.length - 1];
+      if ((lastSig === ")" || elseLike) && out.slice(-1) !== " ") out += " ";
+      out += "{"; lastSig = "{"; lastWord = ""; i++; continue;
+    }
+    if (c === ",") {
+      out += ","; lastSig = ","; lastWord = "";
+      let j = i + 1; while (j < n && (src[j] === " " || src[j] === "\t")) j++;   // съесть пробелы после запятой
+      if (j < n && src[j] !== "\n" && src[j] !== "\r") out += " ";               // один пробел, кроме конца строки
+      i = j; continue;
+    }
+    if (c === "\n") { out += c; lastWord = ""; i++; continue; }                  // не «склеиваем» через строки
+    if (c === " " || c === "\t") { out += c; i++; continue; }                    // пробелы lastSig не меняют
+    out += c; lastSig = c; lastWord = ""; i++;                                   // прочий значимый символ
+  }
+  return out;
+}
+
+function formatCode() {
+  const cm = editor;
+  const scroll = cm.getScrollInfo();
+  const cursor = cm.getCursor();
+  cm.operation(() => {
+    // 1) нормализация пробелов (весь документ как один Undo)
+    const fixed = _formatSpacing(cm.getValue());
+    if (fixed !== cm.getValue())
+      cm.replaceRange(fixed, { line: 0, ch: 0 }, { line: cm.lastLine(), ch: cm.getLine(cm.lastLine()).length });
+    // 2) умное переотступление каждой строки (clike-режим CodeMirror)
+    for (let i = 0; i < cm.lineCount(); i++) cm.indentLine(i, "smart");
+    // 3) срез хвостовых пробелов
+    for (let i = 0; i < cm.lineCount(); i++) {
+      const t = cm.getLine(i), m = /[ \t]+$/.exec(t);
+      if (m) cm.replaceRange("", { line: i, ch: m.index }, { line: i, ch: t.length });
+    }
+  });
+  cm.scrollTo(scroll.left, scroll.top);
+  cm.setCursor(cursor);
+  setStatus("код отформатирован ✓");
+}
+$("#formatBtn").addEventListener("click", formatCode);
 
 $("#themeSelect").addEventListener("change", function () {
   const theme = this.value;
