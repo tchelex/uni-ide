@@ -1004,6 +1004,12 @@
   .status .led.on  { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
   .status .led.off { background: var(--err); }
   #stMsg { margin-left: auto; color: var(--accent); font-weight: 600; }
+  .warm-hint {
+    display: none; align-items: center; gap: 6px;
+    margin-left: auto; font-size: 11px; color: var(--accent-dim); white-space: nowrap;
+  }
+  .warm-spin { display: inline-block; animation: warmspin 2.2s linear infinite; }
+  @keyframes warmspin { to { transform: rotate(360deg); } }
 
   .spin {
     width: 14px; height: 14px; border-radius: 50%;
@@ -1252,6 +1258,7 @@
   <div class="seg"><span class="led" id="ledCore"></span>esp32 core</div>
   <div class="seg"><span class="led" id="ledSerial"></span>serial</div>
   <div class="seg" id="cliVer"></div>
+  <span id="warmHint" class="warm-hint"><span class="warm-spin">⚙</span>Подготовка среды компиляции…</span>
   <div id="stMsg"></div>
 </div>
 
@@ -1638,6 +1645,42 @@ function setActiveSketch(path, name, code) {
   if (typeof code === "string" && code !== editor.getValue()) {
     editor.setValue(code);
   }
+  warmupProject();   // фоновый прогрев среды компиляции для этого проекта
+}
+
+/* ---------- фоновый прогрев среды компиляции ---------- */
+// Чтобы ПЕРВАЯ «Проверка»/«Загрузка» проекта была быстрой, заранее в фоне
+// собираем ядро+библиотеки в build-path проекта. Срабатывает при появлении
+// проекта: старт, новое окно, новый проект, «Сохранить как», открытие.
+let _warmPollTimer = null;
+const _warmedPaths = new Set();        // уже прогретые в этой сессии — не дёргаем повторно
+
+function setWarmHint(on) { const el = $("#warmHint"); if (el) el.style.display = on ? "inline-flex" : "none"; }
+
+async function warmupProject() {
+  const path = currentPath;
+  clearInterval(_warmPollTimer); _warmPollTimer = null;
+  setWarmHint(false);
+  if (!path || _warmedPaths.has(path.toLowerCase())) return;
+  const r = await api("/api/warmup", { path });
+  if (!r || !r.ok) return;
+  if (r.warm) { _warmedPaths.add(path.toLowerCase()); return; }
+  if (!r.warming) return;
+  setWarmHint(true);                    // показать «Подготовка среды…»
+  let tries = 0;
+  _warmPollTimer = setInterval(async () => {
+    if (currentPath !== path || ++tries > 40) {        // сменили проект или таймаут (~2 мин)
+      clearInterval(_warmPollTimer); _warmPollTimer = null;
+      if (currentPath === path) setWarmHint(false);
+      return;
+    }
+    const s = await api("/api/warmup/status?path=" + encodeURIComponent(path));
+    if (s && s.warm) {
+      _warmedPaths.add(path.toLowerCase());
+      clearInterval(_warmPollTimer); _warmPollTimer = null;
+      if (currentPath === path) setWarmHint(false);
+    }
+  }, 3000);
 }
 
 async function loadCode() {

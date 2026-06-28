@@ -638,6 +638,72 @@ def ports():
 
 
 # --------------------------------------------------------------------------- #
+# Прогрев среды компиляции
+# --------------------------------------------------------------------------- #
+# Первая компиляция проекта долгая (~минуту): собирается ядро ESP32 и тяжёлые
+# библиотеки. Эти артефакты живут в build-path проекта и НЕ переносятся между
+# проектами/машинами (ключ кэша зависит от пути). Поэтому при появлении нового
+# проекта (старт, новое окно, «Сохранить как») запускаем ФОНОВУЮ компиляцию,
+# чтобы ядро+библиотеки уже были собраны к первой явной «Проверке» (тогда она
+# ~9 с). Прогрев и реальная компиляция делят блокировку на build-path — реальная
+# компиляция дождётся прогрева, а не запустит второй процесс в том же каталоге.
+_bp_locks = {}
+_bp_guard = threading.Lock()
+_warmed = set()        # build-path с уже собранным ядром
+_warming = set()       # build-path, прогрев которых идёт сейчас
+
+
+def _bp_lock(bp):
+    with _bp_guard:
+        lk = _bp_locks.get(bp)
+        if lk is None:
+            lk = threading.Lock()
+            _bp_locks[bp] = lk
+        return lk
+
+
+def _bp_is_warm(bp):
+    return bp in _warmed or os.path.exists(os.path.join(bp, "core", "core.a"))
+
+
+def _warmup_worker(d, bp):
+    try:
+        with _bp_lock(bp):
+            if not _bp_is_warm(bp):
+                run_cli(["compile", "--fqbn", FQBN, "--build-path", bp, d])
+            _warmed.add(bp)
+    except Exception:
+        pass
+    finally:
+        _warming.discard(bp)
+
+
+@app.route("/api/warmup", methods=["POST"])
+def warmup():
+    """Фоновый прогрев build-path проекта (один раз). Возвращает сразу."""
+    ino = resolve_sketch_path((request.json or {}).get("path"))
+    if not ino:
+        return jsonify({"ok": False})
+    bp = build_path_for_dir(os.path.dirname(ino))
+    if _bp_is_warm(bp):
+        _warmed.add(bp)
+        return jsonify({"ok": True, "warm": True})
+    if bp not in _warming:
+        _warming.add(bp)
+        threading.Thread(target=_warmup_worker, args=(os.path.dirname(ino), bp), daemon=True).start()
+    return jsonify({"ok": True, "warming": True})
+
+
+@app.route("/api/warmup/status", methods=["GET"])
+def warmup_status():
+    ino = resolve_sketch_path(request.args.get("path"))
+    bp = build_path_for_dir(os.path.dirname(ino)) if ino else None
+    warm = bool(bp) and _bp_is_warm(bp)
+    return jsonify({"ok": True, "warm": warm,
+                    "warming": bool(bp) and (bp in _warming) and not warm})
+
+
+# --------------------------------------------------------------------------- #
 # Маршруты — компиляция / загрузка
 # --------------------------------------------------------------------------- #
 @app.route("/api/compile", methods=["POST"])
@@ -645,9 +711,11 @@ def compile_sketch():
     body = request.json or {}
     ino = save_code(body.get("code", ""), body.get("path"))
     d = os.path.dirname(ino)
-    ok, out, err = run_cli(["compile", "--fqbn", FQBN,
-                            "--build-path", build_path_for_dir(d),
-                            d])
+    bp = build_path_for_dir(d)
+    with _bp_lock(bp):                       # дождётся фонового прогрева, если он идёт
+        ok, out, err = run_cli(["compile", "--fqbn", FQBN, "--build-path", bp, d])
+        if ok:
+            _warmed.add(bp)
     return jsonify({"ok": ok, "log": (out + err).strip()})
 
 
@@ -666,11 +734,13 @@ def upload_sketch():
     if monitor_was_on:
         monitor.stop()
 
-    ok, out, err = run_cli(
-        ["compile", "--upload", "-p", port, "--fqbn", FQBN,
-         "--build-path", build_path_for_dir(d),
-         d]
-    )
+    bp = build_path_for_dir(d)
+    with _bp_lock(bp):
+        ok, out, err = run_cli(
+            ["compile", "--upload", "-p", port, "--fqbn", FQBN, "--build-path", bp, d]
+        )
+        if ok:
+            _warmed.add(bp)
 
     if monitor_was_on:
         try:
@@ -714,14 +784,27 @@ def _stream_cli(args, on_stop=None):
         on_stop()
 
 
+def _stream_cli_locked(bp, args, on_stop=None):
+    """_stream_cli под блокировкой build-path: если идёт фоновый прогрев,
+    стрим дождётся его (фронт в это время крутит плавный прогресс-бар)."""
+    lk = _bp_lock(bp)
+    lk.acquire()
+    try:
+        for chunk in _stream_cli(args, on_stop=on_stop):
+            yield chunk
+        _warmed.add(bp)
+    finally:
+        lk.release()
+
+
 @app.route("/api/compile/stream", methods=["GET"])
 def compile_stream():
     ino = resolve_sketch_path(request.args.get("path")) or ensure_default_sketch()
     d = os.path.dirname(ino)
+    bp = build_path_for_dir(d)
     return Response(
-        stream_with_context(_stream_cli(["compile", "--fqbn", FQBN,
-                                          "--build-path", build_path_for_dir(d),
-                                          d])),
+        stream_with_context(_stream_cli_locked(bp,
+            ["compile", "--fqbn", FQBN, "--build-path", bp, d])),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -738,6 +821,7 @@ def upload_stream():
 
     ino = resolve_sketch_path(request.args.get("path")) or ensure_default_sketch()
     d = os.path.dirname(ino)
+    bp = build_path_for_dir(d)
 
     monitor_was_on = monitor.is_on(port)
     monitor_baud = monitor.baud
@@ -752,10 +836,8 @@ def upload_stream():
                 pass
 
     return Response(
-        stream_with_context(_stream_cli(
-            ["compile", "--upload", "-p", port, "--fqbn", FQBN,
-             "--build-path", build_path_for_dir(d),
-             d],
+        stream_with_context(_stream_cli_locked(bp,
+            ["compile", "--upload", "-p", port, "--fqbn", FQBN, "--build-path", bp, d],
             on_stop=on_done,
         )),
         mimetype="text/event-stream",
