@@ -1004,12 +1004,13 @@
   .status .led.on  { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
   .status .led.off { background: var(--err); }
   #stMsg { margin-left: auto; color: var(--accent); font-weight: 600; }
-  .warm-hint {
-    display: none; align-items: center; gap: 6px;
-    margin-left: auto; font-size: 11px; color: var(--accent-dim); white-space: nowrap;
-  }
-  .warm-spin { display: inline-block; animation: warmspin 2.2s linear infinite; }
-  @keyframes warmspin { to { transform: rotate(360deg); } }
+  /* индикатор среды компиляции: красный — прогрев, синий — готово */
+  .status .warm-led { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); transition: background .2s, box-shadow .2s; }
+  .status .warm-led.warming { background: #cc2929; box-shadow: 0 0 5px #cc2929; animation: warmpulse 1.1s ease-in-out infinite; }
+  .status .warm-led.ready   { background: #1e6fd9; box-shadow: 0 0 5px #1e6fd9; }
+  .status .seg.warm-seg:has(.warm-led.warming) { border-color: rgba(204,41,41,.4);  background: rgba(204,41,41,.07); }
+  .status .seg.warm-seg:has(.warm-led.ready)   { border-color: rgba(30,111,217,.4); background: rgba(30,111,217,.07); }
+  @keyframes warmpulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
 
   .spin {
     width: 14px; height: 14px; border-radius: 50%;
@@ -1257,8 +1258,9 @@
   <div class="seg"><span class="led" id="ledCli"></span>arduino-cli</div>
   <div class="seg"><span class="led" id="ledCore"></span>esp32 core</div>
   <div class="seg"><span class="led" id="ledSerial"></span>serial</div>
+  <div class="seg warm-seg" id="warmSeg" title="Среда компиляции: красный — готовится, синий — готова">
+    <span class="warm-led" id="warmLed"></span>среда компиляции</div>
   <div class="seg" id="cliVer"></div>
-  <span id="warmHint" class="warm-hint"><span class="warm-spin">⚙</span>Подготовка среды компиляции…</span>
   <div id="stMsg"></div>
 </div>
 
@@ -1655,30 +1657,34 @@ function setActiveSketch(path, name, code) {
 let _warmPollTimer = null;
 const _warmedPaths = new Set();        // уже прогретые в этой сессии — не дёргаем повторно
 
-function setWarmHint(on) { const el = $("#warmHint"); if (el) el.style.display = on ? "inline-flex" : "none"; }
+// "warming" — красный, "ready" — синий, "" — нейтральный (серый)
+function setWarmState(state) {
+  const led = $("#warmLed"); if (!led) return;
+  led.classList.toggle("warming", state === "warming");
+  led.classList.toggle("ready", state === "ready");
+}
 
 async function warmupProject() {
   const path = currentPath;
   clearInterval(_warmPollTimer); _warmPollTimer = null;
-  setWarmHint(false);
-  if (!path || _warmedPaths.has(path.toLowerCase())) return;
+  if (!path) { setWarmState(""); return; }
+  if (_warmedPaths.has(path.toLowerCase())) { setWarmState("ready"); return; }
   const r = await api("/api/warmup", { path });
-  if (!r || !r.ok) return;
-  if (r.warm) { _warmedPaths.add(path.toLowerCase()); return; }
-  if (!r.warming) return;
-  setWarmHint(true);                    // показать «Подготовка среды…»
+  if (!r || !r.ok) { setWarmState(""); return; }
+  if (r.warm) { _warmedPaths.add(path.toLowerCase()); setWarmState("ready"); return; }
+  if (!r.warming) { setWarmState(""); return; }
+  setWarmState("warming");              // красный — идёт прогрев
   let tries = 0;
   _warmPollTimer = setInterval(async () => {
     if (currentPath !== path || ++tries > 40) {        // сменили проект или таймаут (~2 мин)
       clearInterval(_warmPollTimer); _warmPollTimer = null;
-      if (currentPath === path) setWarmHint(false);
       return;
     }
     const s = await api("/api/warmup/status?path=" + encodeURIComponent(path));
     if (s && s.warm) {
       _warmedPaths.add(path.toLowerCase());
       clearInterval(_warmPollTimer); _warmPollTimer = null;
-      if (currentPath === path) setWarmHint(false);
+      if (currentPath === path) setWarmState("ready");   // синий — прогрев закончен
     }
   }, 3000);
 }
