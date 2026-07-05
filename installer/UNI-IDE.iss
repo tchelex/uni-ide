@@ -87,7 +87,12 @@ Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 ; Галочка на финальной странице (по умолчанию ВЫКЛ): установка драйвера CH340
 ; ЧЕРЕЗ КОМАНДНУЮ СТРОКУ (pnputil), без GUI-инсталлятора WCH. Окно UAC
 ; появится только на эту команду; ученику не нужно ничего нажимать в мастере.
-Filename: "{sys}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\CH341SER\CH341SER.INF"" /install"; WorkingDir: "{app}\drivers\CH341SER"; Description: "Установить драйвер CH340 (нужен, чтобы ПК увидел плату ESP32)"; Flags: postinstall skipifsilent unchecked shellexec waituntilterminated; Verb: runas
+; ВАЖНО: {sysnative}, не {sys} — сам setup.exe 32-битный, и обращение к {sys}
+; (System32) для 32-битного процесса на 64-битной Windows прозрачно уходит в
+; SysWOW64, где pnputil.exe НЕТ (он есть только в настоящем System32) — отсюда
+; «не удаётся найти указанный файл». {sysnative} указывает на настоящий
+; System32 в обход этого перенаправления.
+Filename: "{sysnative}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\CH341SER\CH341SER.INF"" /install"; WorkingDir: "{app}\drivers\CH341SER"; Description: "Установить драйвер CH340 (нужен, чтобы ПК увидел плату ESP32)"; Flags: postinstall skipifsilent unchecked shellexec waituntilterminated; Verb: runas
 ; Галочка «Запустить UNI IDE» (по умолчанию ВКЛ).
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
