@@ -1674,9 +1674,8 @@ async function warmupProject() {
   if (r.warm) { _warmedPaths.add(path.toLowerCase()); setWarmState("ready"); return; }
   if (!r.warming) { setWarmState(""); return; }
   setWarmState("warming");              // красный — идёт прогрев
-  let tries = 0;
   _warmPollTimer = setInterval(async () => {
-    if (currentPath !== path || ++tries > 40) {        // сменили проект или таймаут (~2 мин)
+    if (currentPath !== path) {                        // сменили проект — этот опрос неактуален
       clearInterval(_warmPollTimer); _warmPollTimer = null;
       return;
     }
@@ -1684,8 +1683,16 @@ async function warmupProject() {
     if (s && s.warm) {
       _warmedPaths.add(path.toLowerCase());
       clearInterval(_warmPollTimer); _warmPollTimer = null;
-      if (currentPath === path) setWarmState("ready");   // синий — прогрев закончен
+      setWarmState("ready");                           // синий — прогрев закончен
+    } else if (s && !s.warming) {
+      // прогрев не идёт и не завершён (вытеснен другим проектом или сборка
+      // не удалась) — нейтральное состояние; новый прогрев запросится при
+      // следующем открытии проекта
+      clearInterval(_warmPollTimer); _warmPollTimer = null;
+      setWarmState("");
     }
+    // иначе (warming) продолжаем ждать сколько нужно — на слабых машинах
+    // первая сборка идёт дольше двух минут, индикатор не должен «застревать»
   }, 3000);
 }
 

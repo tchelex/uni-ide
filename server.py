@@ -312,9 +312,13 @@ def pick_file(open_mode, directory=None, save_filename=None):
 
 # Скрываем консольное окно на Windows для всех дочерних процессов
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+# Пониженный приоритет для фоновых сборок: на Windows дочерние процессы
+# (gcc и т.п.) наследуют этот класс — прогрев не забивает ЦП слабых машин.
+BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) if sys.platform == "win32" else 0
 
-def run_cli(args, timeout=900):
-    """Запуск arduino-cli. Возвращает (ok, stdout, stderr)."""
+def run_cli(args, timeout=900, nice=False):
+    """Запуск arduino-cli. Возвращает (ok, stdout, stderr).
+    nice=True — пониженный приоритет (для фонового прогрева)."""
     cmd = [ARDUINO_CLI] + args
     try:
         p = subprocess.run(
@@ -325,7 +329,7 @@ def run_cli(args, timeout=900):
             encoding="utf-8",
             errors="replace",
             env=cli_env(),
-            creationflags=NO_WINDOW,
+            creationflags=NO_WINDOW | (BELOW_NORMAL if nice else 0),
         )
         return p.returncode == 0, p.stdout or "", p.stderr or ""
     except FileNotFoundError:
@@ -608,33 +612,52 @@ def _is_ch340(port_info):
     return (vid in CH340_VIDS) or ("CH340" in desc) or ("CH341" in desc) \
            or ("CH340" in mfr) or ("CH341" in mfr)
 
+# Фронтенд опрашивает порты каждые 2 с. Если arduino-cli тормозит (занятый ЦП),
+# вызовы наслаиваются и плодят новые процессы arduino-cli — лавина. Поэтому:
+# кэш с TTL + single-flight (пока один запрос опрашивает, остальные получают кэш).
+_ports_cache = {"t": 0.0, "data": None}
+_ports_lock = threading.Lock()
+
 @app.route("/api/ports", methods=["GET"])
 def ports():
-    found = {}   # addr -> {addr, ch340, description}
+    now = time.time()
+    if _ports_cache["data"] is not None and now - _ports_cache["t"] < 1.5:
+        return jsonify(_ports_cache["data"])
+    if not _ports_lock.acquire(blocking=False):
+        # другой запрос уже опрашивает — отдаём последнее известное
+        return jsonify(_ports_cache["data"] or {"ports": []})
+    try:
+        found = {}   # addr -> {addr, ch340, description}
 
-    if HAS_PYSERIAL:
-        for p in list_ports.comports():
-            found[p.device] = {
-                "addr": p.device,
-                "ch340": _is_ch340(p),
-                "desc": p.description or "",
-            }
+        if HAS_PYSERIAL:
+            for p in list_ports.comports():
+                found[p.device] = {
+                    "addr": p.device,
+                    "ch340": _is_ch340(p),
+                    "desc": p.description or "",
+                }
 
-    # дополняем данными arduino-cli (может добавить board-matched порты)
-    ok, out, _ = run_cli(["board", "list", "--format", "json"])
-    if ok and out.strip():
-        try:
-            data = json.loads(out)
-            rows = data if isinstance(data, list) else data.get("detected_ports", [])
-            for row in rows:
-                port_info = row.get("port", row)
-                addr = port_info.get("address")
-                if addr and addr not in found:
-                    found[addr] = {"addr": addr, "ch340": False, "desc": ""}
-        except Exception:
-            pass
+        # дополняем данными arduino-cli (может добавить board-matched порты);
+        # короткий таймаут — зависший вызов не должен копить процессы
+        ok, out, _ = run_cli(["board", "list", "--format", "json"], timeout=15)
+        if ok and out.strip():
+            try:
+                data = json.loads(out)
+                rows = data if isinstance(data, list) else data.get("detected_ports", [])
+                for row in rows:
+                    port_info = row.get("port", row)
+                    addr = port_info.get("address")
+                    if addr and addr not in found:
+                        found[addr] = {"addr": addr, "ch340": False, "desc": ""}
+            except Exception:
+                pass
 
-    return jsonify({"ports": list(found.values())})
+        result = {"ports": list(found.values())}
+        _ports_cache["data"] = result
+        _ports_cache["t"] = time.time()
+        return jsonify(result)
+    finally:
+        _ports_lock.release()
 
 
 # --------------------------------------------------------------------------- #
@@ -650,7 +673,14 @@ def ports():
 _bp_locks = {}
 _bp_guard = threading.Lock()
 _warmed = set()        # build-path с уже собранным ядром
-_warming = set()       # build-path, прогрев которых идёт сейчас
+
+# ОДИН рабочий поток прогрева + очередь «актуален только последний».
+# Раньше каждый новый проект/пример запускал СВОЙ поток прогрева, и клики по
+# меню порождали несколько параллельных полных сборок ядра — на слабых машинах
+# это забивало ЦП на 100%, прогрев «не завершался», а сервер переставал
+# отвечать (не открывались «Новый проект», «Примеры», «Новое окно»).
+_warm_guard = threading.Lock()
+_warm_state = {"active": None, "pending": None, "thread_alive": False}
 
 
 def _bp_lock(bp):
@@ -666,31 +696,47 @@ def _bp_is_warm(bp):
     return bp in _warmed or os.path.exists(os.path.join(bp, "core", "core.a"))
 
 
-def _warmup_worker(d, bp):
-    try:
-        with _bp_lock(bp):
-            if not _bp_is_warm(bp):
-                run_cli(["compile", "--fqbn", FQBN, "--build-path", bp, d])
-            _warmed.add(bp)
-    except Exception:
-        pass
-    finally:
-        _warming.discard(bp)
+def _warm_worker():
+    """Единственный поток прогрева: берёт последний запрошенный проект,
+    компилирует его с пониженным приоритетом, повторяет, пока очередь не пуста."""
+    while True:
+        with _warm_guard:
+            job = _warm_state["pending"]
+            _warm_state["pending"] = None
+            _warm_state["active"] = job[1] if job else None
+            if job is None:
+                _warm_state["thread_alive"] = False
+                return
+        d, bp = job
+        try:
+            with _bp_lock(bp):
+                if not _bp_is_warm(bp):
+                    run_cli(["compile", "--fqbn", FQBN, "--build-path", bp, d], nice=True)
+                if _bp_is_warm(bp):
+                    _warmed.add(bp)
+        except Exception:
+            pass
 
 
 @app.route("/api/warmup", methods=["POST"])
 def warmup():
-    """Фоновый прогрев build-path проекта (один раз). Возвращает сразу."""
+    """Запрос фонового прогрева проекта. Возвращает сразу.
+    Прогревы выполняются строго по одному; в очереди хранится только
+    ПОСЛЕДНИЙ запрошенный проект (быстрые переключения не копят сборки)."""
     ino = resolve_sketch_path((request.json or {}).get("path"))
     if not ino:
         return jsonify({"ok": False})
-    bp = build_path_for_dir(os.path.dirname(ino))
+    d = os.path.dirname(ino)
+    bp = build_path_for_dir(d)
     if _bp_is_warm(bp):
         _warmed.add(bp)
         return jsonify({"ok": True, "warm": True})
-    if bp not in _warming:
-        _warming.add(bp)
-        threading.Thread(target=_warmup_worker, args=(os.path.dirname(ino), bp), daemon=True).start()
+    with _warm_guard:
+        if _warm_state["active"] != bp:
+            _warm_state["pending"] = (d, bp)      # вытесняет предыдущий ожидающий
+        if not _warm_state["thread_alive"]:
+            _warm_state["thread_alive"] = True
+            threading.Thread(target=_warm_worker, daemon=True).start()
     return jsonify({"ok": True, "warming": True})
 
 
@@ -699,8 +745,11 @@ def warmup_status():
     ino = resolve_sketch_path(request.args.get("path"))
     bp = build_path_for_dir(os.path.dirname(ino)) if ino else None
     warm = bool(bp) and _bp_is_warm(bp)
-    return jsonify({"ok": True, "warm": warm,
-                    "warming": bool(bp) and (bp in _warming) and not warm})
+    with _warm_guard:
+        warming = bool(bp) and not warm and (
+            _warm_state["active"] == bp or
+            (_warm_state["pending"] is not None and _warm_state["pending"][1] == bp))
+    return jsonify({"ok": True, "warm": warm, "warming": warming})
 
 
 # --------------------------------------------------------------------------- #
