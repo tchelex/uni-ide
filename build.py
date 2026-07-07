@@ -27,6 +27,7 @@ build.py — сборка UNI IDE в исполняемое приложение
 """
 
 import os
+import re
 import sys
 import shutil
 import argparse
@@ -35,10 +36,24 @@ import subprocess
 # --------------------------------------------------------------------------- #
 # Параметры сборки
 # --------------------------------------------------------------------------- #
-VERSION  = "1.2.1"          # единый источник версии (передаётся в Inno Setup)
 APP_NAME = "UNI-IDE"        # имя exe и папки бандла (без пробелов)
 
 HERE     = os.path.dirname(os.path.abspath(__file__))
+
+
+def _read_version():
+    """Единый источник версии — VERSION в server.py (читаем без импорта)."""
+    try:
+        with open(os.path.join(HERE, "server.py"), encoding="utf-8") as f:
+            m = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', f.read(), re.M)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return "0.0.0"
+
+
+VERSION  = _read_version()  # передаётся в Inno Setup и в имя установщика
 DIST_DIR = os.path.join(HERE, "dist", APP_NAME)          # выход PyInstaller (--onedir)
 OUT_DIR  = os.path.join(HERE, "installer-out")           # куда кладём setup.exe
 ISS_FILE = os.path.join(HERE, "installer", "UNI-IDE.iss")

@@ -55,6 +55,10 @@ ICON_PATH = os.path.join(BASE, "icon.ico")
 # Плата зафиксирована: ESP32 Dev Module
 FQBN = "esp32:esp32:esp32"
 
+# Версия приложения — единый источник. build.py читает её отсюда (regex), она же
+# уходит в заголовок окна и в /api/env. Меняем версию правкой ТОЛЬКО этой строки.
+VERSION = "1.2.1"
+
 # Постоянный кэш сборки — ядро и библиотеки компилируются один раз
 BUILD_CACHE = os.path.join(BASE, "build-cache")
 BUILD_PATH  = os.path.join(BASE, "build-tmp")
@@ -572,7 +576,7 @@ def window_new():
     if HAS_WEBVIEW:
         try:
             webview.create_window(
-                "UNI IDE — " + name, url,
+                "UNI IDE " + VERSION + " — " + name, url,
                 width=1280, height=800, min_size=(900, 600), maximized=True,
             )
             opened = True
@@ -612,11 +616,39 @@ def _is_ch340(port_info):
     return (vid in CH340_VIDS) or ("CH340" in desc) or ("CH341" in desc) \
            or ("CH340" in mfr) or ("CH341" in mfr)
 
-# Фронтенд опрашивает порты каждые 2 с. Если arduino-cli тормозит (занятый ЦП),
-# вызовы наслаиваются и плодят новые процессы arduino-cli — лавина. Поэтому:
-# кэш с TTL + single-flight (пока один запрос опрашивает, остальные получают кэш).
+# Список портов берём из pyserial (list_ports) — это делается В ПРОЦЕССЕ,
+# мгновенно и без подпроцессов. Раньше на КАЖДЫЙ опрос (каждые 2 с) дополнительно
+# запускался `arduino-cli board list`, и это оказалось источником лавины при
+# ПОДКЛЮЧЁННОЙ плате: встроенный в arduino-cli serial-discovery активно опрашивает
+# устройство (открывает порт, дёргает DTR/RTS — попутно ресетит ESP32) и плодит
+# дочерние процессы discovery. Так как каждый такой вызов с платой длится дольше
+# интервала опроса, board list висел непрерывно, забивал ЦП на слабых машинах и
+# вытеснял фоновый прогрев («прекомпиляция бесконечна»). Для нашего сценария
+# (USB-ESP32 на CH340) board list ничего не добавляет — pyserial видит порт и
+# определяет CH340 по VID. Поэтому board list оставлен ТОЛЬКО как запасной путь на
+# случай отсутствия pyserial (в собранном бандле pyserial есть всегда).
+# Плюс кэш с TTL + single-flight — на случай частых опросов.
 _ports_cache = {"t": 0.0, "data": None}
 _ports_lock = threading.Lock()
+
+
+def _ports_via_cli():
+    """Запасной перечень портов через arduino-cli (только если нет pyserial)."""
+    found = {}
+    ok, out, _ = run_cli(["board", "list", "--format", "json"], timeout=15)
+    if ok and out.strip():
+        try:
+            data = json.loads(out)
+            rows = data if isinstance(data, list) else data.get("detected_ports", [])
+            for row in rows:
+                port_info = row.get("port", row)
+                addr = port_info.get("address")
+                if addr and addr not in found:
+                    found[addr] = {"addr": addr, "ch340": False, "desc": ""}
+        except Exception:
+            pass
+    return found
+
 
 @app.route("/api/ports", methods=["GET"])
 def ports():
@@ -636,21 +668,8 @@ def ports():
                     "ch340": _is_ch340(p),
                     "desc": p.description or "",
                 }
-
-        # дополняем данными arduino-cli (может добавить board-matched порты);
-        # короткий таймаут — зависший вызов не должен копить процессы
-        ok, out, _ = run_cli(["board", "list", "--format", "json"], timeout=15)
-        if ok and out.strip():
-            try:
-                data = json.loads(out)
-                rows = data if isinstance(data, list) else data.get("detected_ports", [])
-                for row in rows:
-                    port_info = row.get("port", row)
-                    addr = port_info.get("address")
-                    if addr and addr not in found:
-                        found[addr] = {"addr": addr, "ch340": False, "desc": ""}
-            except Exception:
-                pass
+        else:
+            found = _ports_via_cli()
 
         result = {"ports": list(found.values())}
         _ports_cache["data"] = result
@@ -800,8 +819,69 @@ def upload_sketch():
     return jsonify({"ok": ok, "log": (out + err).strip()})
 
 
-def _stream_cli(args, on_stop=None):
-    """Запускает arduino-cli и стримит вывод построчно как SSE."""
+# --------------------------------------------------------------------------- #
+# Прерывание компиляции/прошивки
+# --------------------------------------------------------------------------- #
+# Раньше запущенную сборку нельзя было остановить: даже если фронтенд закрывал
+# SSE-поток, процесс arduino-cli (и его дети — gcc/esptool) продолжал молотить
+# до конца. Особенно мешало, когда в коде ошибка и хочется сразу прервать.
+# Теперь активные процессы регистрируются по build-path, а /api/compile/stop
+# убивает всё дерево процессов и помечает сборку на отмену.
+_procs = {}                       # bp -> {"proc": Popen}
+_inflight = set()                 # bp, для которых сейчас идёт (или ждёт прогрева) сборка
+_cancelled = set()                # bp, для которых запрошена отмена
+_procs_guard = threading.Lock()
+
+
+def _kill_tree(proc):
+    """Убивает arduino-cli вместе с дочерними процессами (gcc/esptool).
+    proc.terminate() снял бы только сам arduino-cli, а тяжёлые дети остались бы
+    молотить ЦП — поэтому на Windows валим всё дерево через taskkill /T."""
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True, creationflags=NO_WINDOW)
+        else:
+            proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+
+def cancel_build(bp):
+    """Отменяет сборку для build-path: помечает на отмену и убивает её процесс.
+    Возвращает False, если для bp ничего не выполняется (чтобы не оставить
+    «висящий» флаг отмены, который прервал бы следующую сборку)."""
+    with _procs_guard:
+        if bp not in _inflight:
+            return False
+        _cancelled.add(bp)
+        ent = _procs.get(bp)
+    if ent:
+        _kill_tree(ent["proc"])
+    return True
+
+
+def cancel_all():
+    """Отменяет все текущие сборки (когда путь не удалось определить)."""
+    with _procs_guard:
+        targets = list(_inflight)
+        for bp in targets:
+            _cancelled.add(bp)
+        procs = [e["proc"] for e in _procs.values()]
+    for p in procs:
+        _kill_tree(p)
+    return bool(targets)
+
+
+def _stream_cli(args, bp=None, on_stop=None):
+    """Запускает arduino-cli и стримит вывод построчно как SSE.
+    Если задан bp — регистрирует процесс, чтобы /api/compile/stop мог его убить."""
     import json as _json
 
     cmd = [ARDUINO_CLI] + args
@@ -820,14 +900,24 @@ def _stream_cli(args, on_stop=None):
         yield "data: " + _json.dumps({"line": "arduino-cli не найден.", "done": True, "ok": False}) + "\n\n"
         return
 
-    for line in proc.stdout:
-        line = line.rstrip("\n\r")
-        if line:
-            yield "data: " + _json.dumps({"line": line}) + "\n\n"
+    if bp is not None:
+        with _procs_guard:
+            _procs[bp] = {"proc": proc}
+    try:
+        for line in proc.stdout:
+            line = line.rstrip("\n\r")
+            if line:
+                yield "data: " + _json.dumps({"line": line}) + "\n\n"
+        proc.wait()
+    finally:
+        if bp is not None:
+            with _procs_guard:
+                if _procs.get(bp, {}).get("proc") is proc:
+                    _procs.pop(bp, None)
 
-    proc.wait()
-    ok = proc.returncode == 0
-    yield "data: " + _json.dumps({"done": True, "ok": ok}) + "\n\n"
+    cancelled = bp is not None and bp in _cancelled
+    ok = (proc.returncode == 0) and not cancelled
+    yield "data: " + _json.dumps({"done": True, "ok": ok, "cancelled": cancelled}) + "\n\n"
 
     if on_stop:
         on_stop()
@@ -835,15 +925,31 @@ def _stream_cli(args, on_stop=None):
 
 def _stream_cli_locked(bp, args, on_stop=None):
     """_stream_cli под блокировкой build-path: если идёт фоновый прогрев,
-    стрим дождётся его (фронт в это время крутит плавный прогресс-бар)."""
+    стрим дождётся его (фронт в это время крутит плавный прогресс-бар).
+    Помечает bp как in-flight и обрабатывает отмену, пришедшую во время ожидания."""
+    import json as _json
+    with _procs_guard:
+        _inflight.add(bp)
     lk = _bp_lock(bp)
     lk.acquire()
     try:
-        for chunk in _stream_cli(args, on_stop=on_stop):
+        with _procs_guard:
+            pre_cancelled = bp in _cancelled
+        if pre_cancelled:
+            # «Стоп» нажали, пока ждали прогрев/блокировку — тяжёлую сборку не запускаем
+            yield "data: " + _json.dumps({"done": True, "ok": False, "cancelled": True}) + "\n\n"
+            if on_stop:
+                on_stop()
+            return
+        for chunk in _stream_cli(args, bp=bp, on_stop=on_stop):
             yield chunk
-        _warmed.add(bp)
+        if _bp_is_warm(bp):
+            _warmed.add(bp)
     finally:
         lk.release()
+        with _procs_guard:
+            _inflight.discard(bp)
+            _cancelled.discard(bp)
 
 
 @app.route("/api/compile/stream", methods=["GET"])
@@ -892,6 +998,20 @@ def upload_stream():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/api/compile/stop", methods=["POST"])
+def compile_stop():
+    """Прерывает текущую компиляцию/прошивку проекта: убивает дерево процессов
+    arduino-cli (вместе с gcc/esptool) и помечает сборку на отмену. Работает и
+    для «Проверить», и для «Загрузить» (общий build-path проекта)."""
+    ino = resolve_sketch_path((request.json or {}).get("path"))
+    if ino:
+        bp = build_path_for_dir(os.path.dirname(ino))
+        stopped = cancel_build(bp)
+    else:
+        stopped = cancel_all()
+    return jsonify({"ok": True, "stopped": stopped})
 
 
 # --------------------------------------------------------------------------- #
@@ -1385,6 +1505,7 @@ def env():
         "pyserial": HAS_PYSERIAL,
         "portable": IS_PORTABLE,
         "version": ver,
+        "app_version": VERSION,
         "fqbn": FQBN,
     })
 
@@ -1433,7 +1554,7 @@ if __name__ == "__main__":
         t = threading.Thread(target=start_flask, daemon=True)
         t.start()
         webview.create_window(
-            "UNI IDE",
+            "UNI IDE " + VERSION,
             "http://127.0.0.1:5000",
             width=1280,
             height=800,

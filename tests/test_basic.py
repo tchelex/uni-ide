@@ -41,6 +41,8 @@ class BaseCase(unittest.TestCase):
             "RECENT_FILE": server.RECENT_FILE,
             "run_cli": server.run_cli,
             "HAS_WEBVIEW": server.HAS_WEBVIEW,
+            "HAS_PYSERIAL": server.HAS_PYSERIAL,
+            "list_ports": getattr(server, "list_ports", None),
         }
         server.SKETCHBOOK = os.path.join(cls.tmp, "Uni_Sketches")
         server.BUILD_PATH = os.path.join(cls.tmp, "build-tmp")
@@ -73,8 +75,14 @@ class BaseCase(unittest.TestCase):
         server._warmed.clear()
         server._ports_cache["data"] = None
         server._ports_cache["t"] = 0.0
+        with server._procs_guard:
+            server._procs.clear()
+            server._inflight.clear()
+            server._cancelled.clear()
         server.run_cli = self._saved["run_cli"]
         server.HAS_WEBVIEW = self._saved["HAS_WEBVIEW"]
+        server.HAS_PYSERIAL = self._saved["HAS_PYSERIAL"]
+        server.list_ports = self._saved["list_ports"]
 
 
 class TestProjects(BaseCase):
@@ -159,6 +167,13 @@ class TestProjects(BaseCase):
         r = _post(self.client, "/api/lib/search", {}).get_json()
         self.assertFalse(r["ok"])
         self.assertEqual(r["results"], [])
+
+    def test_env_reports_app_version(self):
+        # версия приложения для заголовка окна — из единого источника server.VERSION
+        server.run_cli = lambda *a, **k: (True, "", "")     # без реального arduino-cli
+        e = self.client.get("/api/env").get_json()
+        self.assertTrue(e["app_version"])
+        self.assertEqual(e["app_version"], server.VERSION)
 
 
 class FakeCli:
@@ -256,33 +271,183 @@ class TestWarmupStampede(BaseCase):
         self.assertEqual(len(fake.calls), n, "повторный warmup не должен запускать сборку")
 
 
-class TestPortsPileup(BaseCase):
-    """Регрессия: опрос портов не должен наслаивать процессы arduino-cli."""
+class _FakePort:
+    def __init__(self, device, vid=None, description="", manufacturer=""):
+        self.device = device
+        self.vid = vid
+        self.description = description
+        self.manufacturer = manufacturer
 
-    def test_ports_single_flight(self):
-        fake = FakeCli(delay=0.4)
+
+class _FakeListPorts:
+    """Подмена serial.tools.list_ports: порты из памяти + счётчик сканирований."""
+
+    def __init__(self, ports, delay=0.0):
+        self.ports = ports
+        self.delay = delay
+        self.scans = 0
+
+    def comports(self):
+        self.scans += 1
+        if self.delay:
+            time.sleep(self.delay)
+        return list(self.ports)
+
+
+class TestPortsPileup(BaseCase):
+    """Регрессия: опрос портов не должен запускать процессы arduino-cli.
+    С ПОДКЛЮЧЁННОЙ платой `arduino-cli board list` шёл непрерывно (каждые 2 c и
+    подолгу — discovery активно опрашивает устройство), плодя дочерние процессы и
+    забивая ЦП, из-за чего «прекомпиляция бесконечна». Теперь порты берём из
+    pyserial — в процессе, без подпроцессов."""
+
+    def _use_fake_serial(self, ports, delay=0.0):
+        server.HAS_PYSERIAL = True
+        lp = _FakeListPorts(ports, delay)
+        server.list_ports = lp
+        return lp
+
+    def test_ports_from_pyserial_without_cli(self):
+        fake = FakeCli(delay=0.2)
         server.run_cli = fake
+        self._use_fake_serial([
+            _FakePort("COM5", vid=0x1A86, description="USB-SERIAL CH340"),
+            _FakePort("COM3", vid=0x1234, description="Some UART"),
+        ])
+        r = self.client.get("/api/ports").get_json()
+        addrs = {p["addr"]: p for p in r["ports"]}
+        self.assertIn("COM5", addrs)
+        self.assertTrue(addrs["COM5"]["ch340"])      # UniBase (CH340) распознан
+        self.assertIn("COM3", addrs)
+        self.assertFalse(addrs["COM3"]["ch340"])
+        # ключевая регрессия: arduino-cli board list НЕ вызывался
+        self.assertEqual([c for c in fake.calls if c[0] == "board"], [])
+
+    def test_no_cli_pileup_when_board_connected(self):
+        # «плата подключена» → медленный скан; куча одновременных опросов не должна
+        # ни запускать arduino-cli, ни наслаивать сканы (single-flight + кэш)
+        fake = FakeCli(delay=0.2)
+        server.run_cli = fake
+        lp = self._use_fake_serial([_FakePort("COM5", vid=0x1A86, description="CH340")], delay=0.3)
         results = []
 
         def hit():
             c = server.app.test_client()
             results.append(c.get("/api/ports").get_json())
 
-        threads = [threading.Thread(target=hit) for _ in range(5)]
+        threads = [threading.Thread(target=hit) for _ in range(6)]
         for t in threads: t.start()
         for t in threads: t.join()
-        board_calls = [c for c in fake.calls if c[0] == "board"]
-        self.assertLessEqual(len(board_calls), 1, "параллельные /api/ports наслоили вызовы CLI")
-        self.assertEqual(len(results), 5)          # все запросы получили ответ
+        self.assertEqual(len(results), 6)
         self.assertTrue(all("ports" in r for r in results))
+        self.assertEqual([c for c in fake.calls if c[0] == "board"], [])   # без подпроцессов
+        self.assertLessEqual(lp.scans, 1)                                  # single-flight/кэш
 
     def test_ports_cached_within_ttl(self):
-        fake = FakeCli(delay=0.05)
-        server.run_cli = fake
+        lp = self._use_fake_serial([_FakePort("COM5", vid=0x1A86)])
         self.client.get("/api/ports")
         self.client.get("/api/ports")              # в пределах TTL — из кэша
-        board_calls = [c for c in fake.calls if c[0] == "board"]
-        self.assertEqual(len(board_calls), 1)
+        self.assertEqual(lp.scans, 1)
+
+
+class FakePopen:
+    """Подмена subprocess.Popen для проверки контракта _stream_cli
+    (регистрация процесса + пометка отмены в финальном событии)."""
+
+    def __init__(self, lines=(), rc=0):
+        self.pid = 4321
+        self._lines = list(lines)
+        self._rc = rc
+        self.returncode = None
+        self.stdout = iter(self._lines)
+
+    def wait(self, timeout=None):
+        self.returncode = self._rc
+        return self._rc
+
+    def poll(self):
+        return self.returncode
+
+
+class TestStopBuild(BaseCase):
+    """Регрессия: запущенную компиляцию/прошивку можно прервать
+    (раньше процесс arduino-cli молотил до конца, остановить было нельзя)."""
+
+    def test_kill_tree_terminates_real_process(self):
+        # настоящий дочерний процесс: _kill_tree должен его завершить
+        # (на Windows — деревом через taskkill, на POSIX — terminate)
+        import subprocess as sp
+        p = sp.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.assertIsNone(p.poll())
+        server._kill_tree(p)
+        self.assertIsNotNone(p.poll())      # процесс завершён
+
+    def test_kill_tree_none_is_safe(self):
+        server._kill_tree(None)             # не должно падать
+
+    def test_cancel_build_no_inflight_leaves_no_stale_flag(self):
+        bp = os.path.join(server.BUILD_PATH, "nothing")
+        self.assertFalse(server.cancel_build(bp))
+        # ключевой момент: «висящего» флага отмены не осталось,
+        # иначе он прервал бы следующую нормальную сборку
+        self.assertNotIn(bp, server._cancelled)
+
+    def test_cancel_all_idle_returns_false(self):
+        self.assertFalse(server.cancel_all())
+
+    def test_stop_endpoint_idle(self):
+        r = _post(self.client, "/api/sketch/new", {}).get_json()
+        s = _post(self.client, "/api/compile/stop", {"path": r["path"]}).get_json()
+        self.assertTrue(s["ok"])
+        self.assertFalse(s["stopped"])      # нечего останавливать
+
+    def test_prelock_cancellation_skips_build(self):
+        # «Стоп» пришёл, пока ждали прогрев: реальную сборку запускать нельзя
+        bp = os.path.join(server.BUILD_PATH, "proj-abc")
+        called = []
+        orig = server._stream_cli
+        server._stream_cli = lambda *a, **k: called.append(1) or iter(())
+        server._cancelled.add(bp)
+        try:
+            out = "".join(server._stream_cli_locked(bp, ["compile"]))
+        finally:
+            server._stream_cli = orig
+        self.assertEqual(called, [], "тяжёлую сборку не должны были запускать")
+        self.assertIn('"cancelled": true', out)
+        self.assertIn('"done": true', out)
+        # флаги подчищены (иначе сломают следующую сборку)
+        self.assertNotIn(bp, server._cancelled)
+        self.assertNotIn(bp, server._inflight)
+
+    def test_stream_cli_reports_cancelled_and_deregisters(self):
+        import subprocess as sp
+        bp = os.path.join(server.BUILD_PATH, "proj-xyz")
+        orig = sp.Popen
+        sp.Popen = lambda *a, **k: FakePopen(lines=["Compiling sketch\n"], rc=1)
+        server._cancelled.add(bp)
+        try:
+            events = list(server._stream_cli(["compile", "--build-path", bp, "x"], bp=bp))
+        finally:
+            sp.Popen = orig
+        done = json.loads(events[-1].split("data: ", 1)[1].strip())
+        self.assertTrue(done["done"])
+        self.assertFalse(done["ok"])        # отмена ⇒ не «успех»
+        self.assertTrue(done["cancelled"])
+        with server._procs_guard:            # процесс снят с регистрации
+            self.assertNotIn(bp, server._procs)
+
+    def test_stream_cli_normal_run_ok(self):
+        import subprocess as sp
+        bp = os.path.join(server.BUILD_PATH, "proj-ok")
+        orig = sp.Popen
+        sp.Popen = lambda *a, **k: FakePopen(lines=["Sketch uses 1 bytes\n"], rc=0)
+        try:
+            events = list(server._stream_cli(["compile", "--build-path", bp, "x"], bp=bp))
+        finally:
+            sp.Popen = orig
+        done = json.loads(events[-1].split("data: ", 1)[1].strip())
+        self.assertTrue(done["ok"])
+        self.assertFalse(done["cancelled"])
 
 
 if __name__ == "__main__":

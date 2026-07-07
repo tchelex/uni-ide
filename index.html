@@ -184,6 +184,11 @@
   .btn.ghost { background: rgba(255,255,255,0.15); }
   .btn.active { background: rgba(255,255,255,0.35); font-weight: 600; }
   .btn:disabled { opacity: .4; cursor: not-allowed; }
+  /* «Стоп» — прерывание компиляции: белая «таблетка» с красным акцентом */
+  .btn.danger { background: #ffffff; color: var(--err); font-weight: 700; border-radius: 18px; box-shadow: var(--shadow-1); }
+  .btn.danger:hover { background: #fdecea; box-shadow: var(--shadow-2); transform: translateY(-1px); }
+  .btn.danger:active { transform: translateY(0); }
+  .btn.danger .bi { fill: currentColor; stroke: none; }
 
   /* ---------- main split ---------- */
   main {
@@ -1112,6 +1117,9 @@
   <button class="btn primary has-ico" id="uploadBtn" title="Скомпилировать и прошить">
     <svg class="bi" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Загрузить
   </button>
+  <button class="btn danger has-ico" id="stopBtn" title="Остановить компиляцию/прошивку" style="display:none">
+    <svg class="bi" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Стоп
+  </button>
 </header>
 
 <div id="progressWrap"><div id="progressBar"></div></div>
@@ -1555,19 +1563,31 @@ function clearConsole() {
   $("#console").innerHTML = "";
 }
 
+let _building = false, _stopRequested = false;
 function setWorking(on) {
+  _building = on;
   document.body.classList.toggle("working", on);
   $("#uploadBtn").disabled = on;
   $("#verifyBtn").disabled = on;
+  const stop = $("#stopBtn");
+  stop.style.display = on ? "" : "none";
+  if (on) stop.disabled = false; else _stopRequested = false;
 }
 function setStatus(msg) { $("#stMsg").textContent = msg; }
 
 /* ---------- env / ports ---------- */
+let APP_VERSION = "";                       // версия UNI IDE (из /api/env) — в заголовок окна
+function applyWindowTitle() {
+  const v = APP_VERSION ? " " + APP_VERSION : "";
+  document.title = "UNI IDE" + v + (currentName ? " · " + currentName : "");
+}
 async function checkEnv() {
   const e = await api("/api/env");
   $("#ledCli").className  = "led " + (e.arduino_cli ? "on" : "off");
   $("#ledCore").className = "led " + (e.esp32_core ? "on" : "off");
   $("#cliVer").textContent = e.version || "";
+  APP_VERSION = e.app_version || "";
+  applyWindowTitle();
   if (!e.arduino_cli)
     logLine($("#console"), "⚠ arduino-cli не найден — см. README, раздел установки.", "err");
   else if (!e.esp32_core)
@@ -1643,7 +1663,7 @@ function setActiveSketch(path, name, code) {
   currentPath = path || null;
   currentName = name || "";
   $("#fileName").textContent = (name || "") + ".ino";
-  document.title = "UNI IDE · " + (name || "");
+  applyWindowTitle();
   if (typeof code === "string" && code !== editor.getValue()) {
     editor.setValue(code);
   }
@@ -1751,7 +1771,7 @@ function progressStart(indeterminate = false) {
   }, 150);
 }
 
-function progressDone(ok) {
+function progressDone(ok, cancelled = false) {
   clearInterval(_progTimer); _progTimer = null;
   if (ok && _progStart) {                               // самокалибровка: запомнить реальную длительность
     const dur = Date.now() - _progStart;
@@ -1761,7 +1781,7 @@ function progressDone(ok) {
     }
   }
   _progStart = 0;
-  setProgress(ok ? 100 : 60, ok ? "Готово" : "Ошибка");
+  setProgress(ok ? 100 : 60, ok ? "Готово" : cancelled ? "Остановлено" : "Ошибка");
   setTimeout(() => {
     $("#progressWrap").classList.remove("active", "indeterminate");
     $("#progressStage").classList.remove("active");
@@ -1787,33 +1807,60 @@ function applyStage(line) {
   }
 }
 
-/* ---------- SSE runner ---------- */
+/* ---------- SSE runner (прерываемый) ---------- */
+let _es = null;                 // текущий EventSource сборки
+let _finishStream = null;       // единая точка завершения (для кнопки «Стоп»)
+
+// маркеры стадии прошивки: если хоть один встретился, компиляция УЖЕ прошла
+const UPLOAD_RE = /Sketch uses|esptool|Connecting|Uploading|Writing at|Hard resetting|Hash of data|Leaving\.\.\./i;
+const ANSI_RE = /\x1b\[[0-9;]*m/g;   // цветовые ESC-коды arduino-cli (если вдруг просочатся)
+
 function runStream(url, { onStart, onDone }) {
   return new Promise((resolve) => {
     onStart?.();
-    const es = new EventSource(url);
-    es.onmessage = (e) => {
+    let settled = false;
+    let compiled = false;             // дошли до стадии прошивки (компиляция ок)
+    const finish = (ok, cancelled) => {
+      if (settled) return;
+      settled = true;
+      try { _es && _es.close(); } catch (_) {}
+      _es = null; _finishStream = null;
+      onDone?.(ok, cancelled, { compiled });
+      resolve(ok);
+    };
+    _finishStream = finish;
+    _es = new EventSource(url);
+    _es.onmessage = (e) => {
       const d = JSON.parse(e.data);
       if (d.line) {
-        applyStage(d.line);
-        const cls = /error:/i.test(d.line) ? "err"
-                  : /warning:/i.test(d.line) ? null
+        const line = d.line.replace(ANSI_RE, "");
+        applyStage(line);
+        if (UPLOAD_RE.test(line)) compiled = true;
+        const cls = /\berror\b|ошибка|undefined reference/i.test(line) ? "err"
+                  : /warning:/i.test(line) ? null
                   : null;
-        logLine($("#console"), d.line, cls);
+        logLine($("#console"), line, cls);
       }
-      if (d.done) {
-        es.close();
-        onDone?.(d.ok);
-        resolve(d.ok);
-      }
+      if (d.done) finish(d.ok, !!d.cancelled);
     };
-    es.onerror = () => {
-      es.close();
+    _es.onerror = () => {
       logLine($("#console"), "✗ Потеряно соединение со сервером.", "err");
-      onDone?.(false);
-      resolve(false);
+      finish(false, _stopRequested);
     };
   });
+}
+
+/* Прерывание сборки: убиваем процессы arduino-cli на сервере. */
+async function stopBuild() {
+  if (!_building || _stopRequested) return;
+  _stopRequested = true;
+  $("#stopBtn").disabled = true;
+  logLine($("#console"), "⏹ Останавливаю…", "sys");
+  setStatus("остановка…");
+  try { await api("/api/compile/stop", { path: currentPath || "" }); } catch (_) {}
+  // Подстраховка: если поток не закрылся за 2 c (напр. ещё идёт прогрев),
+  // завершаем его сами — сервер уже помечен на отмену и тяжёлую сборку не начнёт.
+  setTimeout(() => { if (_building) _finishStream?.(false, true); }, 2000);
 }
 
 /* ---------- compile / upload ---------- */
@@ -1826,11 +1873,13 @@ async function verify() {
 
   await api("/api/save", { code: editor.getValue(), path: currentPath });
   const ok = await runStream(`/api/compile/stream?path=${encodeURIComponent(currentPath || "")}`, {
-    onDone: (ok) => {
-      logLine($("#console"), ok ? "✓ Компиляция успешна." : "✗ Ошибка компиляции.", ok ? "ok" : "err");
-      progressDone(ok);
+    onDone: (ok, cancelled) => {
+      logLine($("#console"),
+        cancelled ? "⏹ Компиляция остановлена." : ok ? "✓ Компиляция успешна." : "✗ Ошибка компиляции.",
+        cancelled ? "sys" : ok ? "ok" : "err");
+      progressDone(ok, cancelled);
       setWorking(false);
-      setStatus(ok ? "готово" : "ошибка");
+      setStatus(cancelled ? "остановлено" : ok ? "готово" : "ошибка");
     },
   });
 }
@@ -1849,11 +1898,18 @@ async function upload() {
 
   await api("/api/save", { code: editor.getValue(), path: currentPath });
   await runStream(`/api/upload/stream?port=${encodeURIComponent(port)}&path=${encodeURIComponent(currentPath || "")}`, {
-    onDone: (ok) => {
-      logLine($("#console"), ok ? "✓ Прошивка завершена." : "✗ Ошибка. Проверьте порт/кабель (на части плат держите BOOT).", ok ? "ok" : "err");
-      progressDone(ok);
+    onDone: (ok, cancelled, info) => {
+      // Различаем стадию: если до прошивки не дошло (компиляция не прошла) —
+      // это ошибка в КОДЕ, а не в проводе. Иначе — проблема порта/платы.
+      const compileFailed = !ok && !cancelled && !(info && info.compiled);
+      const msg = cancelled ? "⏹ Прошивка остановлена."
+        : ok ? "✓ Прошивка завершена."
+        : compileFailed ? "✗ Ошибка компиляции — исправьте код (подробности выше)."
+        : "✗ Ошибка загрузки. Проверьте порт/кабель (на части плат держите BOOT).";
+      logLine($("#console"), msg, cancelled ? "sys" : ok ? "ok" : "err");
+      progressDone(ok, cancelled);
       setWorking(false);
-      setStatus(ok ? "загружено" : "ошибка");
+      setStatus(cancelled ? "остановлено" : ok ? "загружено" : compileFailed ? "ошибка компиляции" : "ошибка");
     },
   });
 }
@@ -2294,6 +2350,7 @@ function renderSearchResults() {
 /* ---------- bindings ---------- */
 $("#verifyBtn").addEventListener("click", verify);
 $("#uploadBtn").addEventListener("click", upload);
+$("#stopBtn").addEventListener("click", stopBuild);
 $("#refreshBtn").addEventListener("click", () => loadPorts(true));
 $("#portSel").addEventListener("change", () => { userPickedPort = $("#portSel").value; });
 
@@ -2649,8 +2706,110 @@ function _formatSpacing(src) {
   return out;
 }
 
+// «Маска кода»: строки/символы/комментарии заменяем пробелами той же длины
+// (кавычки-ограничители сохраняем). Это даёт чистую структуру кода для анализа
+// отступов без риска принять «//» или «;» внутри строки за настоящий код.
+function _maskCode(src) {
+  let out = "", i = 0; const n = src.length;
+  let inStr = false, inChar = false, inLine = false, inBlock = false;
+  while (i < n) {
+    const c = src[i], c2 = src[i + 1];
+    if (inLine) { out += (c === "\n" ? "\n" : " "); if (c === "\n") inLine = false; i++; continue; }
+    if (inBlock) { if (c === "*" && c2 === "/") { out += "  "; i += 2; inBlock = false; } else { out += (c === "\n" ? "\n" : " "); i++; } continue; }
+    if (inStr) { if (c === "\\") { out += "  "; i += 2; continue; } if (c === '"') { out += '"'; inStr = false; i++; continue; } out += (c === "\n" ? "\n" : " "); i++; continue; }
+    if (inChar) { if (c === "\\") { out += "  "; i += 2; continue; } if (c === "'") { out += "'"; inChar = false; i++; continue; } out += (c === "\n" ? "\n" : " "); i++; continue; }
+    if (c === "/" && c2 === "/") { inLine = true; out += "  "; i += 2; continue; }
+    if (c === "/" && c2 === "*") { inBlock = true; out += "  "; i += 2; continue; }
+    if (c === '"') { inStr = true; out += '"'; i++; continue; }
+    if (c === "'") { inChar = true; out += "'"; i++; continue; }
+    out += c; i++;
+  }
+  return out;
+}
+
+// Структура кода по строкам (из маски): скобочная глубина в начале строки
+// (фигурные отдельно от круглых/квадратных) + первый/последний значимый символ.
+function _codeStructure(src) {
+  const mlines = _maskCode(src).split("\n");
+  const res = [];
+  let brace = 0, round = 0;
+  for (const m of mlines) {
+    const startBrace = brace, startRound = round;
+    for (const ch of m) {
+      if (ch === "{") brace++;
+      else if (ch === "}") brace = Math.max(0, brace - 1);
+      else if (ch === "(" || ch === "[") round++;
+      else if (ch === ")" || ch === "]") round = Math.max(0, round - 1);
+    }
+    const mt = m.replace(/^\s+/, "").replace(/\s+$/, "");
+    res.push({ startBrace, startRound, first: mt[0] || "", last: mt[mt.length - 1] || "", code: mt, blank: mt === "" });
+  }
+  return res;
+}
+
+// Проверка структурной целостности перед форматированием. Format опирается на
+// разбор кода (парность скобок, границы строк), поэтому на «сломанном» синтаксисе
+// — незакрытая кавычка/скобка — и нормализация пробелов, и умный отступ едут.
+// Лучше не трогать код, а точно указать, что закрыть. Возвращает {ok} либо
+// {ok:false, reason, line, ch}.
+function _scanBalance(src) {
+  let i = 0; const n = src.length;
+  let line = 0, ch = 0;
+  let inStr = false, inChar = false, inLine = false, inBlock = false;
+  let openLine = 0, openCh = 0;             // где открылась незакрытая строка/символ/комментарий
+  const stack = [];                          // { c, line, ch } для (){}[]
+  const PAIR = { "}": "{", ")": "(", "]": "[" };
+  const NAME = { "{": 'фигурная скобка «}»', "(": 'круглая скобка «)»', "[": 'квадратная скобка «]»' };
+  const adv = () => { if (src[i] === "\n") { line++; ch = 0; } else ch++; i++; };
+  while (i < n) {
+    const c = src[i], c2 = src[i + 1];
+    if (inLine) { if (c === "\n") inLine = false; adv(); continue; }
+    if (inBlock) { if (c === "*" && c2 === "/") { adv(); adv(); inBlock = false; } else adv(); continue; }
+    if (inStr) {
+      if (c === "\\") { adv(); adv(); continue; }            // экранирование (в т.ч. перенос строки «\»)
+      if (c === "\n") return { ok: false, reason: 'не закрыта кавычка «"»', line: openLine, ch: openCh };
+      if (c === '"') inStr = false;
+      adv(); continue;
+    }
+    if (inChar) {
+      if (c === "\\") { adv(); adv(); continue; }
+      if (c === "\n") return { ok: false, reason: "не закрыт символ «'»", line: openLine, ch: openCh };
+      if (c === "'") inChar = false;
+      adv(); continue;
+    }
+    if (c === "/" && c2 === "/") { inLine = true; adv(); adv(); continue; }
+    if (c === "/" && c2 === "*") { inBlock = true; openLine = line; openCh = ch; adv(); adv(); continue; }
+    if (c === '"') { inStr = true; openLine = line; openCh = ch; adv(); continue; }
+    if (c === "'") { inChar = true; openLine = line; openCh = ch; adv(); continue; }
+    if (c === "{" || c === "(" || c === "[") { stack.push({ c, line, ch }); adv(); continue; }
+    if (c === "}" || c === ")" || c === "]") {
+      const open = stack.pop();
+      if (!open || open.c !== PAIR[c])
+        return { ok: false, reason: "лишняя или несогласованная скобка «" + c + "»", line, ch };
+      adv(); continue;
+    }
+    adv();
+  }
+  if (inBlock) return { ok: false, reason: "не закрыт комментарий «/*»", line: openLine, ch: openCh };
+  if (inStr)  return { ok: false, reason: 'не закрыта кавычка «"»', line: openLine, ch: openCh };
+  if (inChar) return { ok: false, reason: "не закрыт символ «'»", line: openLine, ch: openCh };
+  if (stack.length) {
+    const o = stack[stack.length - 1];
+    return { ok: false, reason: "не закрыта " + NAME[o.c], line: o.line, ch: o.ch };
+  }
+  return { ok: true };
+}
+
 function formatCode() {
   const cm = editor;
+  // Не форматируем сломанный код: иначе отступы/пробелы «поедут» до конца файла.
+  const bal = _scanBalance(cm.getValue());
+  if (!bal.ok) {
+    cm.setCursor({ line: bal.line || 0, ch: bal.ch || 0 });
+    cm.focus();
+    setStatus("⚠ Формат: " + bal.reason + " (строка " + ((bal.line || 0) + 1) + ") — сначала исправьте");
+    return;
+  }
   const scroll = cm.getScrollInfo();
   const cursor = cm.getCursor();
   cm.operation(() => {
@@ -2660,6 +2819,40 @@ function formatCode() {
       cm.replaceRange(fixed, { line: 0, ch: 0 }, { line: cm.lastLine(), ch: cm.getLine(cm.lastLine()).length });
     // 2) умное переотступление каждой строки (clike-режим CodeMirror)
     for (let i = 0; i < cm.lineCount(); i++) cm.indentLine(i, "smart");
+    // 2b) страховка от «съезда» при пропущенной «;»: clike считает неоконченный
+    // стейтмент продолжением и лишне сдвигает следующую строку. На чистом уровне
+    // блока (не внутри «(...)») лишний отступ оправдан, только если предыдущая
+    // строка кода реально «висит» (оператор, запятая, «{», заголовок if/for/…,
+    // метка) или текущая строка — продолжение. Иначе возвращаем на уровень блока.
+    const struct = _codeStructure(cm.getValue());
+    const unit = cm.getOption("indentUnit") || 2;
+    const CONT = /^[.,)\]?:+\-*/%&|^<>=!]/;             // текущая строка начинается как продолжение
+    const OPEND = /[{,([]$|[-+*/%&|^<>=!]$/;            // предыдущая строка «висит» открывателем/оператором
+    const HDR = /^(\}\s*)?(else\b|do\b|(else\s+)?(if|for|while|switch)\b)/;
+    let prev = null;
+    for (let i = 0; i < cm.lineCount(); i++) {
+      const s = struct[i];
+      if (!s || s.blank) continue;                     // пустые/строки-комментарии не трогаем
+      if (s.startRound === 0 && prev) {
+        const real = cm.getLine(i);
+        const lead = real.replace(/^\s+/, "");
+        const curIndent = real.length - lead.length;
+        let lvl = s.startBrace;
+        if (s.first === "}" || s.first === ")" || s.first === "]") lvl = Math.max(0, s.startBrace - 1);
+        const blockIndent = lvl * unit;
+        if (curIndent > blockIndent) {
+          const justified =
+            OPEND.test(prev.last) ||
+            prev.last === ";" || prev.last === ":" ||    // сиблинг в switch/метке, тернарник
+            /\b(else|do)$/.test(prev.code) ||            // else/do без «{»
+            (prev.last === ")" && HDR.test(prev.code)) || // безскобочное тело if/for/while/switch
+            CONT.test(s.first);
+          if (!justified)
+            cm.replaceRange("", { line: i, ch: blockIndent }, { line: i, ch: curIndent });
+        }
+      }
+      prev = s;
+    }
     // 3) срез хвостовых пробелов
     for (let i = 0; i < cm.lineCount(); i++) {
       const t = cm.getLine(i), m = /[ \t]+$/.exec(t);
