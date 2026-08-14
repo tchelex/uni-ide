@@ -13,13 +13,14 @@
 <link rel="stylesheet" href="/vendor/codemirror/theme/material-darker.min.css" />
 <link rel="stylesheet" href="/vendor/codemirror/theme/nord.min.css" />
 <link rel="stylesheet" href="/vendor/codemirror/addon/hint/show-hint.min.css" />
+<link rel="stylesheet" href="/vendor/codemirror/addon/lint/lint.min.css" />
 <link rel="stylesheet" href="/vendor/fonts/fonts.css" />
 
 <style>
   :root {
     /* --- Arduino IDE palette --- */
     --bg:        #f5f5f5;
-    --panel:     #00878a;   /* Arduino teal */
+    --panel:     #008184;   /* Arduino teal (тулбар Arduino IDE 2) */
     --panel-2:   #ffffff;
     --panel-3:   #e8e8e8;   /* editor gutter / side bg */
     --line:      #c8c8c8;
@@ -27,13 +28,19 @@
     --text:      #1a1a1a;
     --text-hdr:  #ffffff;
     --muted:     #757575;
-    --accent:    #00878a;
-    --accent-dim:#005f61;
+    --accent:    #008184;   /* фирменный teal Arduino IDE 2 */
+    --accent-dim:#005c5f;
     --accent-lt: #62aeb2;
     --ok:        #007700;
     --err:       #cc2929;
-    --console-bg:#1b2229;
-    --console-fg:#d4d4d4;
+    /* вывод (консоль/Serial) — белый с тёмным текстом, как Output в Arduino IDE 2 */
+    --console-bg:#ffffff;
+    --console-fg:#1f1f1f;
+    /* «полосы» под шапкой (вкладки и тулбары) — лёгкий фирменный тон:
+       светло-бирюзовый фон, мягкие границы, белые чипы-контролы без рамок */
+    --strip:      #eef6f6;
+    --strip-line: #dcecec;
+    --strip-text: #43797b;
     --mono: "IBM Plex Mono", ui-monospace, monospace;
     --sans: "IBM Plex Sans", system-ui, sans-serif;
     /* единая шкала скруглений, теней и плавности (освежение интерфейса) */
@@ -42,7 +49,7 @@
     --ease:  cubic-bezier(.4, 0, .2, 1);
     --shadow-1: 0 1px 2px rgba(0,0,0,.05), 0 1px 3px rgba(0,0,0,.07);
     --shadow-2: 0 6px 18px rgba(0,0,0,.12);
-    --focus: 0 0 0 3px rgba(0,135,138,.28);
+    --focus: 0 0 0 3px rgba(0,129,132,.28);
   }
 
   /* доступные focus-кольца для клавиатурной навигации */
@@ -147,9 +154,13 @@
   .spacer { flex: 1; }
 
   /* ---------- controls ---------- */
+  /* ЕДИНЫЙ стиль всех элементов шапки (ровный тулбар, как в Arduino IDE):
+     одна геометрия (32px, радиус 16), один фон-«таблетка», один вес шрифта.
+     Кнопки различаются только подписью и иконкой. */
   select, .btn {
     font-family: var(--sans);
     font-size: 12.5px;
+    font-weight: 600;
     height: 32px;
     border-radius: 16px;
     border: none;
@@ -162,39 +173,37 @@
     outline: none;
     white-space: nowrap;
   }
-  select { min-width: 120px; background: rgba(0,0,0,0.18); }
+  select { min-width: 120px; }
   select option { background: #fff; color: var(--text); }
-  select:hover, .btn:hover { background: rgba(255,255,255,0.28); }
+  /* background-color (не shorthand), чтобы hover не стирал стрелку-картинку у select */
+  select:hover, .btn:hover { background-color: rgba(255,255,255,0.30); }
+  /* стрелка ▾ у выбора COM-порта — тот же белый треугольник, что у кнопки «Файл» */
+  header select {
+    -webkit-appearance: none;
+    appearance: none;
+    padding-right: 30px;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6'%3E%3Cpath d='M0 0h8L4 6z' fill='%23ffffff'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+  }
   .btn:active { transform: translateY(1px); }
   .btn.icon { padding: 0 10px; border-radius: 50%; width: 32px; display: inline-flex; align-items: center; justify-content: center; }
   .btn svg { display: block; }
 
-  .btn.primary {
-    background: #ffffff;
-    color: var(--accent);
-    font-weight: 700;
-    border-radius: 18px;
-    box-shadow: var(--shadow-1);
-  }
-  .btn.primary:hover { background: #e8f7f7; box-shadow: var(--shadow-2); transform: translateY(-1px); }
-  .btn.primary:active { transform: translateY(0); }
   /* иконки в кнопках шапки заголовка */
   .btn .bi { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
   .btn.has-ico { display: inline-flex; align-items: center; gap: 7px; }
-  .btn.ghost { background: rgba(255,255,255,0.15); }
-  .btn.active { background: rgba(255,255,255,0.35); font-weight: 600; }
+  .btn.ghost { background: rgba(255,255,255,0.18); }
+  .btn.active { background: rgba(255,255,255,0.35); }
   .btn:disabled { opacity: .4; cursor: not-allowed; }
-  /* «Стоп» — прерывание компиляции: белая «таблетка» с красным акцентом */
-  .btn.danger { background: #ffffff; color: var(--err); font-weight: 700; border-radius: 18px; box-shadow: var(--shadow-1); }
-  .btn.danger:hover { background: #fdecea; box-shadow: var(--shadow-2); transform: translateY(-1px); }
-  .btn.danger:active { transform: translateY(0); }
+  /* «Стоп» — единый стиль с остальными; отличие — иконка-квадрат */
   .btn.danger .bi { fill: currentColor; stroke: none; }
 
   /* ---------- main split ---------- */
   main {
     flex: 1;
     display: grid;
-    grid-template-columns: minmax(360px, 1fr) 6px var(--side-w, 420px);
+    grid-template-columns: minmax(360px, 1fr) 1px var(--side-w, 420px);
     grid-template-rows: minmax(0, 1fr);
     min-height: 0;
   }
@@ -215,42 +224,32 @@
     background: var(--line);
     transition: background .12s;
   }
-  .col-resizer::before {           /* расширенная зона захвата */
+  .col-resizer::before {           /* расширенная зона захвата вокруг тонкой линии */
     content: "";
     position: absolute;
-    inset: 0 -4px;
-  }
-  .col-resizer::after {            /* точки-«грип» по центру */
-    content: "";
-    position: absolute;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    width: 4px; height: 34px;
-    background: repeating-linear-gradient(var(--muted) 0 2px, transparent 2px 5px);
-    border-radius: 2px; opacity: .45;
-    pointer-events: none;
-    transition: opacity .12s;
+    inset: 0 -5px;
   }
   .col-resizer:hover, .col-resizer.dragging { background: var(--accent); }
-  .col-resizer:hover::after, .col-resizer.dragging::after { opacity: 0; }
+  /* Высоты серых полос под шапкой ВЫРОВНЕНЫ между левой и правой частями:
+     ряд вкладок — 36px, ряд инструментов — 40px. Линии идут сплошняком. */
   .file-tab {
     font-family: var(--mono);
     font-size: 12px;
-    color: var(--muted);
+    color: var(--strip-text);
     padding: 0 0 0 4px;
-    background: var(--panel-3);
-    border-bottom: 1px solid var(--line);
+    background: var(--strip);
+    border-bottom: 1px solid var(--strip-line);
     display: flex;
     align-items: flex-end;
     gap: 0;
-    height: 34px;
+    height: 36px;
   }
   .file-tab .ino {
-    color: var(--text);
+    color: var(--accent-dim);
     background: #ffffff;
-    border: 1px solid var(--line);
+    border: 1px solid var(--strip-line);
     border-bottom: none;
-    border-radius: 4px 4px 0 0;
+    border-radius: 6px 6px 0 0;
     padding: 6px 16px;
     font-size: 12.5px;
   }
@@ -259,22 +258,23 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 5px 12px;
-    background: var(--panel-3);
-    border-bottom: 1px solid var(--line);
+    height: 40px;                      /* = высоте тулбаров правой панели */
+    padding: 0 12px;
+    background: var(--strip);
+    border-bottom: 1px solid var(--strip-line);
     flex-shrink: 0;
   }
   .editor-toolbar label {
     font-size: 12px;
-    color: var(--muted);
+    color: var(--strip-text);
     white-space: nowrap;
   }
   .editor-toolbar select {
     font-family: var(--sans);
     font-size: 12px;
     height: 26px;
-    border-radius: 4px;
-    border: 1px solid var(--line);
+    border-radius: 6px;
+    border: 1px solid transparent;     /* чип без рамки; рамка приходит на фокус */
     background: #fff;
     color: var(--text);
     padding: 0 8px;
@@ -286,8 +286,8 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    border: 1px solid var(--line);
-    border-radius: 4px;
+    border: 1px solid transparent;
+    border-radius: 6px;
     background: #fff;
     overflow: hidden;
   }
@@ -302,7 +302,7 @@
     line-height: 1;
     padding: 0;
   }
-  .font-size-ctrl button:hover { background: var(--panel-3); }
+  .font-size-ctrl button:hover { background: rgba(0,129,132,.08); }
   .font-size-ctrl span {
     font-family: var(--mono);
     font-size: 12px;
@@ -314,18 +314,18 @@
   .toolbar-sep {
     width: 1px;
     height: 20px;
-    background: var(--line);
+    background: var(--strip-line);
   }
   .toolbar-spacer { flex: 1; min-width: 12px; }
   .fmt-btn {
     display: inline-flex; align-items: center; gap: 5px;
     height: 26px; padding: 0 10px;
     font-family: var(--sans); font-size: 12px;
-    border: 1px solid var(--line); border-radius: var(--r-sm, 6px);
+    border: 1px solid transparent; border-radius: 6px;
     background: #fff; color: var(--text); cursor: pointer; white-space: nowrap;
     transition: border-color .15s var(--ease), color .15s var(--ease), background .15s var(--ease);
   }
-  .fmt-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--panel-3); }
+  .fmt-btn:hover { border-color: var(--accent); color: var(--accent); }
   .fmt-btn svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; }
   /* ---------- editor search box ---------- */
   .editor-search {
@@ -335,8 +335,8 @@
     gap: 3px;
     height: 26px;
     padding: 0 3px 0 7px;
-    border: 1px solid var(--line);
-    border-radius: 4px;
+    border: 1px solid transparent;
+    border-radius: 6px;
     background: #fff;
     transition: border-color .12s;
   }
@@ -378,8 +378,8 @@
     line-height: 1;
     padding: 0;
   }
-  .search-nav:hover { background: var(--panel-3); color: var(--text); }
-  .search-nav.on { background: var(--panel-3); color: var(--accent); }
+  .search-nav:hover { background: rgba(0,129,132,.08); color: var(--text); }
+  .search-nav.on { background: rgba(0,129,132,.10); color: var(--accent); }
   /* ---------- replace panel (под полем поиска) ---------- */
   .replace-pop {
     display: none;
@@ -409,9 +409,9 @@
   }
   .replace-pop input:focus { border-color: var(--accent); }
   .rp-btn {
-    border: 1px solid var(--line);
-    background: var(--panel-3);
-    border-radius: 4px;
+    border: 1px solid var(--strip-line);
+    background: var(--strip);
+    border-radius: 6px;
     height: 24px;
     padding: 0 9px;
     font-size: 12px;
@@ -475,33 +475,29 @@
   }
   .tabs {
     display: flex;
-    background: var(--panel-3);
-    border-bottom: 1px solid var(--line);
+    gap: 2px;
+    height: 36px;                      /* = высоте .file-tab слева */
+    padding: 0 5px;
+    background: var(--strip);
+    border-bottom: 1px solid var(--strip-line);
     flex-shrink: 0;
   }
-  .tab {
+  .tab {                               /* вкладки-«чипы»: активная — белая */
     position: relative;
     font-family: var(--sans);
     font-size: 12.5px;
-    padding: 11px 16px;
-    color: var(--muted);
+    margin: 5px 0;
+    padding: 0 12px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    color: var(--strip-text);
     cursor: pointer;
     user-select: none;
-    transition: color .15s var(--ease);
+    transition: color .15s var(--ease), background .15s var(--ease);
   }
-  .tab::after {                       /* анимированное подчёркивание */
-    content: "";
-    position: absolute;
-    left: 14px; right: 14px; bottom: 0;
-    height: 2.5px; border-radius: 2px 2px 0 0;
-    background: var(--accent);
-    transform: scaleX(0);
-    transition: transform .2s var(--ease);
-  }
-  .tab:hover { color: var(--text); }
-  .tab:hover::after { transform: scaleX(.4); opacity: .5; }
-  .tab.active { color: var(--accent); font-weight: 600; }
-  .tab.active::after { transform: scaleX(1); opacity: 1; }
+  .tab:hover { color: var(--accent-dim); background: rgba(255,255,255,.6); }
+  .tab.active { color: var(--accent); background: #ffffff; font-weight: 600; }
 
   /* контейнер для всех панелей — заполняет оставшееся место */
   .panes-wrap {
@@ -523,38 +519,39 @@
   .log-toolbar {
     position: absolute;
     top: 0; left: 0; right: 0;
-    height: 30px;
+    height: 40px;
     display: flex;
     align-items: center;
     justify-content: flex-end;
     gap: 6px;
     padding: 0 8px;
-    background: #141920;
-    border-bottom: 1px solid #2a3040;
+    background: var(--strip);
+    border-bottom: 1px solid var(--strip-line);
     z-index: 2;
   }
   .log-toolbar button {
     font-family: var(--mono);
     font-size: 11px;
-    background: transparent;
-    border: 1px solid #2a3040;
-    color: #8892a0;
-    border-radius: 4px;
-    padding: 2px 8px;
+    background: #ffffff;
+    border: 1px solid transparent;
+    color: var(--strip-text);
+    border-radius: 6px;
+    padding: 4px 10px;
     cursor: pointer;
     transition: color .12s, border-color .12s;
   }
-  .log-toolbar button:hover { color: #d4d4d4; border-color: #4a5568; }
-  .log-toolbar .copied { color: #6dbf67 !important; border-color: #6dbf67 !important; }
+  .log-toolbar button:hover { color: var(--accent); border-color: var(--accent); }
+  .log-toolbar .copied { color: var(--ok) !important; border-color: var(--ok) !important; }
 
   /* ---- кнопка прокрутки вниз ---- */
   .log-scroll-btn {
     position: absolute;
     bottom: 10px;
     right: 14px;
-    background: #2a3040;
-    border: 1px solid #4a5568;
-    color: #d4d4d4;
+    background: #ffffff;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    box-shadow: var(--shadow-1);
     border-radius: 50%;
     width: 28px; height: 28px;
     font-size: 14px;
@@ -583,24 +580,24 @@
     user-select: text;
     cursor: text;
   }
-  .log .ok  { color: #6dbf67; }
-  .log .err { color: #f06060; }
-  .log .sys { color: #62aeb2; }
-  .log .rx  { color: #a8d8a8; }
+  .log .ok  { color: var(--ok); }
+  .log .err { color: var(--err); }
+  .log .sys { color: var(--muted); }
+  .log .rx  { color: var(--console-fg); }
 
   /* консоль: лог от toolbar до низа */
   .pane[data-pane="console"] .log {
-    top: 30px; left: 0; right: 0; bottom: 0;
+    top: 40px; left: 0; right: 0; bottom: 0;
   }
 
-  /* serial: бар 46px, инпут 48px, лог в середине */
+  /* serial: бар 40px, инпут 48px, лог в середине */
   .pane[data-pane="serial"] .serial-bar {
     position: absolute;
-    top: 0; left: 0; right: 0; height: 46px;
+    top: 0; left: 0; right: 0; height: 40px;
     z-index: 2;
   }
   .pane[data-pane="serial"] .log {
-    top: 46px; left: 0; right: 0; bottom: 48px;
+    top: 40px; left: 0; right: 0; bottom: 48px;
   }
   .pane[data-pane="serial"] .serial-input {
     position: absolute;
@@ -610,26 +607,26 @@
   /* docs: верхняя панель 38px + iframe на всё остальное */
   .pane[data-pane="docs"] .docs-bar {
     position: absolute;
-    top: 0; left: 0; right: 0; height: 38px;
+    top: 0; left: 0; right: 0; height: 40px;
     display: flex; align-items: center; justify-content: space-between;
     gap: 8px; padding: 0 10px;
-    background: var(--panel-3);
-    border-bottom: 1px solid var(--line);
+    background: var(--strip);
+    border-bottom: 1px solid var(--strip-line);
     z-index: 2;
   }
   .pane[data-pane="docs"] .docs-title {
-    font-size: 12.5px; font-weight: 600; color: var(--text);
+    font-size: 12.5px; font-weight: 600; color: var(--accent-dim);
   }
   .pane[data-pane="docs"] .docs-bar .btn {
     background: #fff; color: var(--accent);
-    border: 1px solid var(--line); border-radius: 4px;
+    border: 1px solid transparent; border-radius: 6px;
     height: 28px; font-size: 12px; padding: 0 10px;
   }
-  .pane[data-pane="docs"] .docs-bar .btn:hover { background: #eaf6f6; }
+  .pane[data-pane="docs"] .docs-bar .btn:hover { border-color: var(--accent); }
   .docs-frame {
     position: absolute;
-    top: 38px; left: 0; right: 0;
-    width: 100%; height: calc(100% - 38px);
+    top: 40px; left: 0; right: 0;
+    width: 100%; height: calc(100% - 40px);
     border: 0; background: #fff;
     display: block;
   }
@@ -638,8 +635,8 @@
     display: flex;
     gap: 6px;
     padding: 8px 10px;
-    border-top: 1px solid var(--line);
-    background: var(--panel-3);
+    border-top: 1px solid var(--strip-line);
+    background: var(--strip);
     align-items: center;
   }
   .serial-input input {
@@ -647,9 +644,9 @@
     font-family: var(--mono);
     font-size: 12.5px;
     background: #ffffff;
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     color: var(--text);
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 0 10px;
     height: 30px;
     outline: none;
@@ -657,36 +654,69 @@
   .serial-input input:focus { border-color: var(--accent); }
   .serial-bar {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     align-items: center;
-    padding: 8px 10px;
-    background: var(--panel-3);
-    border-bottom: 1px solid var(--line);
+    padding: 0 8px;
+    background: var(--strip);
+    border-bottom: 1px solid var(--strip-line);
   }
   .serial-bar select, .serial-bar .btn {
     background: #ffffff;
     color: var(--text);
-    border: 1px solid var(--line);
-    border-radius: 4px;
+    border: 1px solid transparent;
+    border-radius: 6px;
     height: 30px;
     font-size: 12.5px;
     padding: 0 10px;
   }
-  .serial-bar .btn:hover { background: var(--panel-3); }
-  .serial-bar .btn.active { color: var(--accent); border-color: var(--accent); }
+  .serial-bar .btn:hover { background: #ffffff; color: var(--accent); }
+  .serial-bar .btn.active { color: var(--accent); background: rgba(0,129,132,.10); }
   .serial-bar .serial-ts {
     margin-left: auto;
     display: inline-flex; align-items: center; gap: 5px;
-    font-size: 12px; color: var(--muted);
+    font-size: 12px; color: var(--strip-text);
     cursor: pointer; user-select: none; white-space: nowrap;
   }
   .serial-bar .serial-ts input { accent-color: var(--accent); cursor: pointer; margin: 0; }
   .serial-bar .serial-ts:hover { color: var(--text); }
-  /* метка времени перед строкой в Serial-логе (тёмный фон) */
-  #serialLog .ts { color: #6f8696; }
+  /* метка времени перед строкой в Serial-логе */
+  #serialLog .ts { color: #9aa5ad; }
+
+  /* переключатель «Текст | График» в Serial */
+  .serial-view { display: inline-flex; border: none; border-radius: 6px; overflow: hidden; flex-shrink: 0; }
+  .serial-view .sview {
+    font-family: var(--sans); font-size: 12px; height: 28px; padding: 0 9px;
+    background: #ffffff; color: var(--strip-text); border: none; cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .serial-view .sview + .sview { border-left: 1px solid var(--strip-line); }
+  .serial-view .sview.active { background: var(--accent); color: #fff; }
+
+  /* график Serial (плоттер): занимает место лога */
+  .serial-plot {
+    position: absolute; top: 40px; left: 0; right: 0; bottom: 48px;
+    background: #ffffff;
+  }
+  .serial-plot[hidden] { display: none; }
+  .serial-plot canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .plot-legend {
+    position: absolute; top: 8px; left: 50px; right: 10px;
+    display: flex; flex-wrap: wrap; gap: 4px 14px;
+    font-family: var(--mono); font-size: 11px; color: var(--text);
+    pointer-events: none;
+  }
+  .plot-legend .sw {
+    display: inline-block; width: 12px; height: 3px; border-radius: 2px;
+    margin-right: 5px; vertical-align: middle;
+  }
+  .plot-hint {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; font-family: var(--sans); font-size: 12.5px; color: var(--muted);
+    line-height: 1.8; pointer-events: none;
+  }
 
   /* libraries */
-  .lib-pane { padding: 12px; gap: 10px; overflow: auto; background: #fff; }
+  .lib-pane { padding: 0 12px 12px; gap: 10px; overflow: auto; background: #fff; }
   .lib-search { display: flex; gap: 8px; }
   .lib-search input {
     flex: 1;
@@ -766,7 +796,7 @@
   }
   .lib-chip {
     font-family: var(--mono); font-size: 10.5px;
-    background: var(--panel-3); color: var(--accent-dim);
+    background: var(--strip); color: var(--accent-dim);
     border-radius: 3px; padding: 1px 6px;
   }
   .lib-loc {
@@ -787,41 +817,40 @@
   .lib-filter:focus { border-color: var(--accent); }
 
   /* вкладки внутри панели «Библиотеки» */
-  .lib-tabs {
-    display: flex; gap: 4px;
-    border-bottom: 1px solid var(--line);
+  .lib-tabs {   /* полоса 40px в фирменном тоне — как тулбары остальных разделов */
+    display: flex; gap: 2px;
+    height: 40px;
+    margin: 0 -12px 10px;
+    padding: 0 8px;
+    background: var(--strip);
+    border-bottom: 1px solid var(--strip-line);
     flex-shrink: 0;
+    position: sticky; top: 0; z-index: 3;
   }
-  .lib-tab {
+  .lib-tab {                           /* вкладки-«чипы», как у разделов справа */
     position: relative;
     font-family: var(--sans); font-size: 12px; font-weight: 600;
-    color: var(--muted);
-    padding: 9px 12px;
+    color: var(--strip-text);
+    margin: 7px 0;
+    padding: 0 12px;
+    border-radius: 6px;
+    display: flex; align-items: center;
     cursor: pointer; user-select: none; white-space: nowrap;
-    transition: color .15s var(--ease);
+    transition: color .15s var(--ease), background .15s var(--ease);
   }
-  .lib-tab::after {
-    content: "";
-    position: absolute;
-    left: 10px; right: 10px; bottom: -1px;
-    height: 2.5px; border-radius: 2px 2px 0 0;
-    background: var(--accent);
-    transform: scaleX(0);
-    transition: transform .2s var(--ease);
-  }
-  .lib-tab:hover { color: var(--text); }
-  .lib-tab.active { color: var(--accent); }
-  .lib-tab.active::after { transform: scaleX(1); }
+  .lib-tab:hover { color: var(--accent-dim); background: rgba(255,255,255,.6); }
+  .lib-tab.active { color: var(--accent); background: #ffffff; }
   .lib-subpane { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
   .lib-subpane[hidden] { display: none; }
 
   /* ---------- File menu ---------- */
   .menu { position: relative; }
-  .menu-btn {
-    font-family: var(--sans); font-size: 13px; font-weight: 600;
-    height: 32px; border: none; border-radius: 6px;
-    background: rgba(255,255,255,0.16); color: #fff;
-    padding: 0 12px; cursor: pointer;
+  .menu-btn {   /* тот же стиль, что у остальных кнопок шапки */
+    font-family: var(--sans); font-size: 12.5px; font-weight: 600;
+    height: 32px; border: none; border-radius: 16px;
+    background: rgba(255,255,255,0.18); color: #fff;
+    padding: 0 13px; cursor: pointer;
+    transition: background .15s var(--ease);
   }
   .menu-btn:hover, .menu-btn.open { background: rgba(255,255,255,0.30); }
   .menu-list {
@@ -838,7 +867,7 @@
     cursor: pointer; white-space: nowrap; color: var(--text);
     display: flex; align-items: center; gap: 8px;
   }
-  .menu-item:hover { background: var(--panel-3); color: var(--accent); }
+  .menu-item:hover { background: var(--strip); color: var(--accent); }
   .menu-item .hint { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
   .menu-sep { height: 1px; background: var(--line); margin: 5px 4px; }
   .menu-label {
@@ -851,7 +880,7 @@
     cursor: pointer; color: var(--text);
     display: flex; flex-direction: column; gap: 1px;
   }
-  .recent-item:hover { background: var(--panel-3); }
+  .recent-item:hover { background: var(--strip); }
   .recent-item .r-name { font-weight: 600; }
   .recent-item .r-path {
     font-family: var(--mono); font-size: 10px; color: var(--muted);
@@ -903,7 +932,7 @@
     transition: transform .12s;
   }
   .ex-group.open .ex-lib::before { transform: rotate(90deg); }
-  .ex-lib:hover { background: var(--panel-3); }
+  .ex-lib:hover { background: var(--strip); }
   .ex-lib .ex-cnt { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--muted); font-weight: 400; }
   .ex-items { display: none; }
   .ex-group.open .ex-items { display: block; }
@@ -917,7 +946,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .ex-item:hover { background: var(--panel-3); color: var(--accent); }
+  .ex-item:hover { background: var(--strip); color: var(--accent); }
   .ex-empty { font-size: 12px; color: var(--muted); padding: 6px 10px; font-style: italic; }
 
   /* ---------- modal ---------- */
@@ -955,9 +984,9 @@
   }
   .modal-actions .btn {
     height: 34px; border-radius: 6px;
-    background: var(--panel-3); color: var(--text);
+    background: var(--strip); color: var(--text);
   }
-  .modal-actions .btn:hover { background: var(--line); }
+  .modal-actions .btn:hover { background: var(--strip-line); }
   .modal-actions .btn.primary { background: var(--accent); color: #fff; }
   .modal-actions .btn.primary:hover { background: var(--accent-dim); }
   .sketch-row {
@@ -979,42 +1008,35 @@
   .modal-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 18px; }
 
   /* ---------- status bar ---------- */
+  /* Нижняя панель — как в Arduino IDE: teal с белым текстом и МИНИМУМ данных:
+     «среда» (готова/готовится/ошибка — детали в подсказке), «плата», статус
+     действия и версия. Технические пилюли (arduino-cli, esp32 core, serial,
+     версия CLI) убраны — их состояние объединено в один сегмент «среда». */
   .status {
     height: 30px;
     flex-shrink: 0;
-    background: var(--panel-3);
-    border-top: 1px solid var(--line);
+    background: var(--panel);
+    border-top: 1px solid var(--accent-dim);
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 18px;
     padding: 0 14px;
     font-family: var(--mono);
     font-size: 11px;
-    color: var(--muted);
+    color: rgba(255,255,255,.88);
     overflow: hidden;
   }
-  .status .seg { display: flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }
-  #cliVer { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
-  /* индикаторы окружения как компактные пилюли */
-  .status .seg:has(.led) {
-    background: rgba(0,0,0,.045);
-    border: 1px solid var(--line-soft);
-    border-radius: 999px;
-    padding: 2px 10px 2px 8px;
-    transition: border-color .15s var(--ease), background .15s var(--ease);
+  .status .seg { display: flex; align-items: center; gap: 7px; white-space: nowrap; flex-shrink: 0; }
+  .status .led {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: rgba(255,255,255,.45);
+    transition: background .2s, box-shadow .2s;
   }
-  .status .seg:has(.led.on)  { border-color: rgba(0,119,0,.35);  background: rgba(0,119,0,.06); }
-  .status .seg:has(.led.off) { border-color: rgba(204,41,41,.35); background: rgba(204,41,41,.06); }
-  .status .led { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-  .status .led.on  { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
-  .status .led.off { background: var(--err); }
-  #stMsg { margin-left: auto; color: var(--accent); font-weight: 600; }
-  /* индикатор среды компиляции: красный — прогрев, синий — готово */
-  .status .warm-led { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); transition: background .2s, box-shadow .2s; }
-  .status .warm-led.warming { background: #cc2929; box-shadow: 0 0 5px #cc2929; animation: warmpulse 1.1s ease-in-out infinite; }
-  .status .warm-led.ready   { background: #1e6fd9; box-shadow: 0 0 5px #1e6fd9; }
-  .status .seg.warm-seg:has(.warm-led.warming) { border-color: rgba(204,41,41,.4);  background: rgba(204,41,41,.07); }
-  .status .seg.warm-seg:has(.warm-led.ready)   { border-color: rgba(30,111,217,.4); background: rgba(30,111,217,.07); }
+  .status .led.on      { background: #7ce87c; box-shadow: 0 0 5px rgba(124,232,124,.8); }
+  .status .led.off     { background: #ff8d7a; box-shadow: 0 0 5px rgba(255,141,122,.8); }
+  .status .led.warming { background: #ffd35c; box-shadow: 0 0 5px rgba(255,211,92,.8); animation: warmpulse 1.1s ease-in-out infinite; }
+  #stMsg { margin-left: auto; color: #ffffff; font-weight: 600; }
+  #verSeg { color: rgba(255,255,255,.55); }
   @keyframes warmpulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
 
   .spin {
@@ -1028,7 +1050,7 @@
 
   /* ---------- progress bar ---------- */
   #progressWrap {
-    height: 4px;
+    height: 7px;              /* было 4px — «чуть заметнее по высоте» */
     background: #d0eeee;
     flex-shrink: 0;
     display: none;
@@ -1200,12 +1222,16 @@
       <!-- serial -->
       <div class="pane" data-pane="serial">
         <div class="serial-bar">
-          <select id="baudSel" style="min-width:110px">
+          <select id="baudSel" style="min-width:88px">
             <option>9600</option><option>57600</option>
             <option selected>115200</option><option>230400</option><option>921600</option>
           </select>
           <button class="btn ghost" id="serialToggle">Подключить</button>
           <button class="btn ghost icon" id="serialClear" title="Очистить">⌫</button>
+          <div class="serial-view">
+            <button class="sview active" id="serialViewText" title="Текстовый вывод порта">Текст</button>
+            <button class="sview" id="serialViewPlot" title="График чисел из Serial (как плоттер Arduino)">График</button>
+          </div>
           <label class="serial-ts" title="Добавлять метку времени в начале каждой строки">
             <input type="checkbox" id="serialTsChk" checked />
             <span>Время</span>
@@ -1213,6 +1239,14 @@
         </div>
         <div class="log" id="serialLog"></div>
         <button class="log-scroll-btn" id="serialScrollBtn" title="Прокрутить вниз">↓</button>
+        <div class="serial-plot" id="serialPlot" hidden>
+          <canvas id="plotCanvas"></canvas>
+          <div class="plot-legend" id="plotLegend"></div>
+          <div class="plot-hint" id="plotHint">График чисел из Serial.<br>
+            Плата должна печатать числа, например:<br>
+            <b>Serial.println(val);</b> — одна линия,<br>
+            <b>Serial.println("a:1 b:2");</b> или <b>«1 2 3»</b> — несколько линий.</div>
+        </div>
         <div class="serial-input">
           <input id="serialSend" placeholder="отправить в порт + Enter" />
           <button class="btn ghost" id="serialSendBtn">→</button>
@@ -1230,7 +1264,7 @@
           <div class="lib-installed-head">
             <input class="lib-filter" id="libFilter" placeholder="фильтр установленных…" />
             <button class="mini-btn" id="libRefreshBtn"
-                    style="background:var(--panel-3);color:var(--accent-dim);">обновить</button>
+                    style="background:var(--strip);color:var(--accent-dim);">обновить</button>
           </div>
           <div id="libInstalled"></div>
         </div>
@@ -1263,13 +1297,12 @@
 </main>
 
 <div class="status" id="statusBar">
-  <div class="seg"><span class="led" id="ledCli"></span>arduino-cli</div>
-  <div class="seg"><span class="led" id="ledCore"></span>esp32 core</div>
-  <div class="seg"><span class="led" id="ledSerial"></span>serial</div>
-  <div class="seg warm-seg" id="warmSeg" title="Среда компиляции: красный — готовится, синий — готова">
-    <span class="warm-led" id="warmLed"></span>среда компиляции</div>
-  <div class="seg" id="cliVer"></div>
+  <div class="seg" id="envSeg" title="Проверка среды…">
+    <span class="led" id="envLed"></span><span id="envText">среда</span></div>
+  <div class="seg" id="boardSeg">
+    <span class="led" id="boardLed"></span><span id="boardText">плата не подключена</span></div>
   <div id="stMsg"></div>
+  <div class="seg" id="verSeg"></div>
 </div>
 
 <div class="modal-overlay" id="modalOverlay">
@@ -1281,6 +1314,7 @@
 <script src="/vendor/codemirror/addon/edit/closebrackets.min.js"></script>
 <script src="/vendor/codemirror/addon/edit/matchbrackets.min.js"></script>
 <script src="/vendor/codemirror/addon/hint/show-hint.min.js"></script>
+<script src="/vendor/codemirror/addon/lint/lint.min.js"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const api = (url, body) =>
@@ -1298,9 +1332,67 @@ let currentName = null;        // имя проекта (без .ino) для з�
 const DOCS_URL = "https://fadeev-iliya.github.io/UNI/index_ru.html";
 
 /* ---------- editor ---------- */
+// Лёгкий синтаксический линтер (без компилятора): по мере набора подсвечивает
+// незакрытые/несогласованные скобки «(){}[]» и незакрытые строки/символы/
+// комментарии «/* */» — самые частые ошибки. Тот же разбор, что во Format, но
+// собирает ВСЕ проблемы и отдаёт аннотации CodeMirror (значок на полях +
+// подчёркивание + подсказка). Семантику (типы, необъявленные имена, пропущенную
+// «;») не ловит — это по силам только компилятору.
+function _cmLint(text) {
+  const P = CodeMirror.Pos;
+  const anns = [];
+  let i = 0; const n = text.length;
+  let line = 0, ch = 0;
+  let inStr = false, inChar = false, inLine = false, inBlock = false;
+  let openLine = 0, openCh = 0;
+  const stack = [];
+  const PAIR = { "}": "{", ")": "(", "]": "[" };
+  const NAME = { "{": "фигурная скобка «}»", "(": "круглая скобка «)»", "[": "квадратная скобка «]»" };
+  const adv = () => { if (text[i] === "\n") { line++; ch = 0; } else ch++; i++; };
+  const mark = (msg, l, c, len) => anns.push({ message: msg, severity: "error", from: P(l, c), to: P(l, c + (len || 1)) });
+  while (i < n) {
+    const c = text[i], c2 = text[i + 1];
+    if (inLine) { if (c === "\n") inLine = false; adv(); continue; }
+    if (inBlock) { if (c === "*" && c2 === "/") { adv(); adv(); inBlock = false; } else adv(); continue; }
+    if (inStr) {
+      if (c === "\\") { adv(); adv(); continue; }
+      if (c === "\n") { mark('Не закрыта кавычка «"»', openLine, openCh); inStr = false; adv(); continue; }
+      if (c === '"') inStr = false;
+      adv(); continue;
+    }
+    if (inChar) {
+      if (c === "\\") { adv(); adv(); continue; }
+      if (c === "\n") { mark("Не закрыт символ «'»", openLine, openCh); inChar = false; adv(); continue; }
+      if (c === "'") inChar = false;
+      adv(); continue;
+    }
+    if (c === "/" && c2 === "/") { inLine = true; adv(); adv(); continue; }
+    if (c === "/" && c2 === "*") { inBlock = true; openLine = line; openCh = ch; adv(); adv(); continue; }
+    if (c === '"') { inStr = true; openLine = line; openCh = ch; adv(); continue; }
+    if (c === "'") { inChar = true; openLine = line; openCh = ch; adv(); continue; }
+    if (c === "{" || c === "(" || c === "[") { stack.push({ c, line, ch }); adv(); continue; }
+    if (c === "}" || c === ")" || c === "]") {
+      const open = stack.pop();
+      if (!open || open.c !== PAIR[c]) {
+        mark("Лишняя или несогласованная скобка «" + c + "»", line, ch);
+        if (open && open.c !== PAIR[c]) stack.push(open);   // несовпавшую открывающую не «съедаем»
+      }
+      adv(); continue;
+    }
+    adv();
+  }
+  if (inBlock) mark("Не закрыт комментарий «/*»", openLine, openCh, 2);
+  else if (inStr) mark('Не закрыта кавычка «"»', openLine, openCh);
+  else if (inChar) mark("Не закрыт символ «'»", openLine, openCh);
+  for (const o of stack) mark("Не закрыта " + (NAME[o.c] || "скобка"), o.line, o.ch);
+  return anns;
+}
+
 const editor = CodeMirror.fromTextArea($("#code"), {
   mode: "text/x-c++src",
   lineNumbers: true,
+  gutters: ["CodeMirror-linenumbers", "CodeMirror-lint-markers"],
+  lint: { getAnnotations: _cmLint, delay: 350 },
   indentUnit: 2,
   tabSize: 2,
   autoCloseBrackets: true,
@@ -1581,13 +1673,32 @@ function applyWindowTitle() {
   const v = APP_VERSION ? " " + APP_VERSION : "";
   document.title = "UNI IDE" + v + (currentName ? " · " + currentName : "");
 }
+/* Сегмент «среда» в статус-баре объединяет всё техническое (arduino-cli,
+   ядро esp32, pyserial, прогрев) в одно понятное состояние; детали — в title. */
+let _envOk = null;            // null — проверка ещё идёт
+let _warmNow = "";            // "", "warming", "ready" — состояние прогрева
+
+function renderEnvSeg() {
+  const led = $("#envLed"), txt = $("#envText");
+  if (_envOk === false)            { led.className = "led off";     txt.textContent = "среда: ошибка"; }
+  else if (_warmNow === "warming") { led.className = "led warming"; txt.textContent = "среда: готовится…"; }
+  else if (_envOk)                 { led.className = "led on";      txt.textContent = "среда: готова"; }
+  else                             { led.className = "led";         txt.textContent = "среда"; }
+}
+
 async function checkEnv() {
   const e = await api("/api/env");
-  $("#ledCli").className  = "led " + (e.arduino_cli ? "on" : "off");
-  $("#ledCore").className = "led " + (e.esp32_core ? "on" : "off");
-  $("#cliVer").textContent = e.version || "";
+  _envOk = !!(e.arduino_cli && e.esp32_core);
   APP_VERSION = e.app_version || "";
   applyWindowTitle();
+  $("#verSeg").textContent = APP_VERSION ? "UNI IDE " + APP_VERSION : "";
+  $("#envSeg").title = [
+    "arduino-cli: " + (e.arduino_cli ? "найден" : "НЕ найден"),
+    "ядро esp32: " + (e.esp32_core ? "установлено" : "НЕ установлено"),
+    "serial-порт (pyserial): " + (e.pyserial ? "доступен" : "недоступен"),
+    e.version || "",
+  ].filter(Boolean).join("\n");
+  renderEnvSeg();
   if (!e.arduino_cli)
     logLine($("#console"), "⚠ arduino-cli не найден — см. README, раздел установки.", "err");
   else if (!e.esp32_core)
@@ -1603,6 +1714,9 @@ function setDeviceConnected(on, port) {
   b.title = on
     ? "UniBase подключён" + (port ? " · " + port : "")
     : "UniBase не подключён";
+  // сегмент «плата» в статус-баре (серый — просто не подключена, это не ошибка)
+  $("#boardLed").className = "led" + (on ? " on" : "");
+  $("#boardText").textContent = on ? "UniBase на " + port : "плата не подключена";
 }
 
 async function loadPorts(autoSelect = false) {
@@ -1677,11 +1791,10 @@ function setActiveSketch(path, name, code) {
 let _warmPollTimer = null;
 const _warmedPaths = new Set();        // уже прогретые в этой сессии — не дёргаем повторно
 
-// "warming" — красный, "ready" — синий, "" — нейтральный (серый)
+// Состояние прогрева показывается в объединённом сегменте «среда» статус-бара
 function setWarmState(state) {
-  const led = $("#warmLed"); if (!led) return;
-  led.classList.toggle("warming", state === "warming");
-  led.classList.toggle("ready", state === "ready");
+  _warmNow = state || "";
+  renderEnvSeg();
 }
 
 async function warmupProject() {
@@ -2133,7 +2246,6 @@ function startMonUI() {
   _serialAtLineStart = true;          // новая сессия — первая строка с меткой
   $("#serialToggle").textContent = "Отключить";
   $("#serialToggle").classList.add("active");
-  $("#ledSerial").className = "led on";
   switchPane("serial");
   monPoll = setInterval(async () => {
     const r = await api("/api/monitor/read");
@@ -2152,6 +2264,7 @@ function _serialTs() {
 }
 
 function appendSerial(text) {
+  plotFeed(text);                  // числа копятся для «Графика» в любом режиме
   const el = $("#serialLog");
   if (!_serialTsOn) {
     const s = document.createElement("span");
@@ -2183,7 +2296,6 @@ function stopMonUI() {
   clearInterval(monPoll);
   $("#serialToggle").textContent = "Подключить";
   $("#serialToggle").classList.remove("active");
-  $("#ledSerial").className = "led off";
 }
 async function serialSend() {
   const inp = $("#serialSend");
@@ -2191,6 +2303,154 @@ async function serialSend() {
   await api("/api/monitor/send", { data: inp.value });
   inp.value = "";
 }
+
+/* ---------- Serial-плоттер (график чисел из порта, как в Arduino) ---------- */
+// Числа копятся всегда, пока открыт монитор (даже в режиме «Текст») — при
+// переключении на «График» история уже на экране. Форматы строк как у плоттера
+// Arduino: «12.5», «1 2 3», «1,2,3» или пары «temp:23.5 hum:40».
+const PLOT_COLORS = ["#008184", "#e67e22", "#8e44ad", "#2e86de", "#c0392b", "#27ae60", "#b8860b", "#e91e63"];
+const PLOT_MAX = 400;                 // точек на серию (скользящее окно)
+let plotView = false;                 // активен ли режим «График»
+let _plotSeries = {};                 // имя -> {data: [], color}
+let _plotOrder = [];                  // порядок появления серий
+let _plotPartial = "";                // хвост неполной строки между порциями
+let _plotDrawTimer = null, _plotLastDraw = 0;
+
+function plotReset() {
+  _plotSeries = {}; _plotOrder = []; _plotPartial = "";
+  renderPlotLegend();
+  schedulePlotDraw();
+}
+
+function plotFeed(text) {
+  _plotPartial += text;
+  let nl;
+  while ((nl = _plotPartial.indexOf("\n")) !== -1) {
+    const line = _plotPartial.slice(0, nl).trim();
+    _plotPartial = _plotPartial.slice(nl + 1);
+    if (line) plotParseLine(line);
+  }
+  if (_plotPartial.length > 4096) _plotPartial = "";   // поток без переводов строк — не копим
+}
+
+const _PLOT_NUM = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+function plotParseLine(line) {
+  const parts = line.split(/[\s,;\t]+/).filter(Boolean);
+  let idx = 0, added = false;
+  for (const p of parts) {
+    let name = null, val = NaN;
+    const kv = p.match(/^([^:=]+)[:=](-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$/);
+    if (kv) { name = kv[1]; val = parseFloat(kv[2]); }
+    else if (_PLOT_NUM.test(p)) { idx++; name = "значение " + idx; val = parseFloat(p); }
+    if (name === null || !isFinite(val)) continue;    // нечисловые строки — не для графика
+    let s = _plotSeries[name];
+    if (!s) {
+      s = _plotSeries[name] = { data: [], color: PLOT_COLORS[_plotOrder.length % PLOT_COLORS.length] };
+      _plotOrder.push(name);
+    }
+    s.data.push(val);
+    if (s.data.length > PLOT_MAX) s.data.shift();
+    added = true;
+  }
+  if (added && plotView) { renderPlotLegend(); schedulePlotDraw(); }
+}
+
+function renderPlotLegend() {
+  const lg = $("#plotLegend"), hint = $("#plotHint");
+  const has = _plotOrder.length > 0;
+  hint.style.display = has ? "none" : "flex";
+  if (!has) { lg.innerHTML = ""; return; }
+  lg.innerHTML = _plotOrder.map(n => {
+    const s = _plotSeries[n];
+    const last = s.data.length ? s.data[s.data.length - 1] : "";
+    return `<span><span class="sw" style="background:${s.color}"></span>${esc(n)}: ${last}</span>`;
+  }).join("");
+}
+
+// Троттлинг перерисовки (~25 к/с) на setTimeout: requestAnimationFrame
+// замирает в фоновом/невидимом окне, а данные из порта продолжают идти.
+function schedulePlotDraw() {
+  if (_plotDrawTimer) return;
+  const wait = Math.max(0, 40 - (Date.now() - _plotLastDraw));
+  _plotDrawTimer = setTimeout(() => {
+    _plotDrawTimer = null;
+    _plotLastDraw = Date.now();
+    drawPlot();
+  }, wait);
+}
+
+function _plotTick(v) {
+  const a = Math.abs(v);
+  if (a >= 1000) return v.toFixed(0);
+  if (a >= 10) return v.toFixed(1);
+  return v.toFixed(2);
+}
+
+function drawPlot() {
+  if (!plotView) return;
+  const cv = $("#plotCanvas");
+  const box = cv.parentElement.getBoundingClientRect();
+  if (box.width < 40 || box.height < 40) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = box.width, H = box.height;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  }
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+
+  const padL = 46, padR = 10, padT = 26, padB = 12;
+  const pw = W - padL - padR, ph = H - padT - padB;
+
+  // общий диапазон Y по всем сериям (с запасом 8%)
+  let mn = Infinity, mx = -Infinity;
+  for (const n of _plotOrder)
+    for (const v of _plotSeries[n].data) { if (v < mn) mn = v; if (v > mx) mx = v; }
+  if (!isFinite(mn)) { mn = 0; mx = 1; }
+  if (mn === mx) { mn -= 1; mx += 1; }
+  const pad = (mx - mn) * 0.08;
+  mn -= pad; mx += pad;
+
+  // сетка и подписи Y
+  g.font = '10px "IBM Plex Mono", ui-monospace, monospace';
+  g.strokeStyle = "#ececec"; g.fillStyle = "#8a8a8a"; g.lineWidth = 1;
+  const ticks = 4;
+  for (let i = 0; i <= ticks; i++) {
+    const y = padT + ph - (ph * i / ticks);
+    g.beginPath(); g.moveTo(padL, y + .5); g.lineTo(W - padR, y + .5); g.stroke();
+    g.fillText(_plotTick(mn + (mx - mn) * i / ticks), 4, y + 3);
+  }
+
+  // линии серий; свежие данные прижаты к правому краю
+  const step = pw / (PLOT_MAX - 1);
+  for (const n of _plotOrder) {
+    const d = _plotSeries[n].data;
+    if (d.length < 2) continue;
+    g.strokeStyle = _plotSeries[n].color;
+    g.lineWidth = 1.6; g.lineJoin = "round"; g.lineCap = "round";
+    g.beginPath();
+    for (let i = 0; i < d.length; i++) {
+      const x = padL + pw - (d.length - 1 - i) * step;
+      const y = padT + ph - ((d[i] - mn) / (mx - mn)) * ph;
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+}
+
+function setSerialView(plot) {
+  plotView = plot;
+  $("#serialViewText").classList.toggle("active", !plot);
+  $("#serialViewPlot").classList.toggle("active", plot);
+  $("#serialLog").style.display = plot ? "none" : "";
+  $("#serialScrollBtn").classList.remove("visible");
+  $("#serialPlot").hidden = !plot;
+  if (plot) { renderPlotLegend(); schedulePlotDraw(); }
+}
+$("#serialViewText").addEventListener("click", () => setSerialView(false));
+$("#serialViewPlot").addEventListener("click", () => setSerialView(true));
+new ResizeObserver(() => { if (plotView) schedulePlotDraw(); }).observe($("#serialPlot"));
 
 /* ---------- libraries ---------- */
 function esc(s) {
@@ -2372,7 +2632,7 @@ $("#consoleCopyBtn").addEventListener("click", function () {
 
 $("#consoleClearBtn").addEventListener("click", clearConsole);
 $("#serialToggle").addEventListener("click", serialToggle);
-$("#serialClear").addEventListener("click", () => { $("#serialLog").innerHTML = ""; _serialAtLineStart = true; });
+$("#serialClear").addEventListener("click", () => { $("#serialLog").innerHTML = ""; _serialAtLineStart = true; plotReset(); });
 (function initSerialTs() {
   const chk = $("#serialTsChk");
   const saved = localStorage.getItem("uni.serialTs");
