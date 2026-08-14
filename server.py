@@ -57,7 +57,7 @@ FQBN = "esp32:esp32:esp32"
 
 # Версия приложения — единый источник. build.py читает её отсюда (regex), она же
 # уходит в заголовок окна и в /api/env. Меняем версию правкой ТОЛЬКО этой строки.
-VERSION = "1.2.2"
+VERSION = "1.3.0"
 
 # Постоянный кэш сборки — ядро и библиотеки компилируются один раз
 BUILD_CACHE = os.path.join(BASE, "build-cache")
@@ -1486,6 +1486,239 @@ def mon_send():
 
 
 # --------------------------------------------------------------------------- #
+# Автообновление (payload из GitHub Releases)
+# --------------------------------------------------------------------------- #
+# Схема: exe — тонкий загрузчик (bootstrap.py), а логика IDE (server.py,
+# index.html, vendor) — обычные файлы рядом. Релиз публикует лёгкий
+# payload-<ver>.zip (+ .sha256). Фоновый поток раз в несколько часов смотрит
+# тег releases/latest (по редиректу, без API-лимитов GitHub), скачивает payload,
+# сверяет sha256 и раскладывает в updates/pending. Применяет его ЗАГРУЗЧИК при
+# следующем запуске (с бэкапом и автооткатом). Если payload требует более
+# новой полной установки (min_base > базовой версии) — обновление не стейджится,
+# а UI предлагает скачать полный установщик.
+import zipfile
+import urllib.request
+import urllib.error
+
+GH_OWNER, GH_REPO = "tchelex", "uni-ide"
+GH_LATEST_URL   = f"https://github.com/{GH_OWNER}/{GH_REPO}/releases/latest"
+GH_DOWNLOAD_URL = f"https://github.com/{GH_OWNER}/{GH_REPO}/releases/download"
+UPDATES_DIR   = os.path.join(BASE, "updates")
+UPDATE_PERIOD = 4 * 3600          # сек между фоновыми проверками
+UPDATE_DELAY  = 30                # сек после старта до первой проверки
+
+
+def _read_base_version():
+    """Версия ПОЛНОЙ установки (пишет build.py в бандл). В dev — VERSION."""
+    try:
+        with open(os.path.join(BASE, "base-version.txt"), encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return VERSION
+
+BASE_VERSION = _read_base_version()
+
+
+def parse_ver(s):
+    """'v1.2.10' -> (1, 2, 10); мусор -> None."""
+    s = (s or "").strip().lstrip("vV")
+    if not s:
+        return None
+    try:
+        return tuple(int(x) for x in s.split("."))
+    except ValueError:
+        return None
+
+
+def ver_newer(a, b):
+    """True, если версия a новее b (строки)."""
+    pa, pb = parse_ver(a), parse_ver(b)
+    return bool(pa and pb) and pa > pb
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+
+
+def fetch_latest_version(timeout=6):
+    """Читает тег последнего релиза из редиректа /releases/latest.
+    Возвращает строку версии ('1.2.3') или None (нет сети и т.п.)."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        opener.open(GH_LATEST_URL, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        loc = e.headers.get("Location", "") if e.code in (301, 302, 303, 307, 308) else ""
+        m = re.search(r"/tag/v?([0-9][0-9.]*)$", loc)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+    return None                     # редиректа не было — формат неожиданный
+
+
+def _download(url, dst, timeout=30):
+    """Скачивает url в файл dst (поток, без лишней памяти)."""
+    req = urllib.request.Request(url, headers={"User-Agent": "UNI-IDE-updater"})
+    with urllib.request.urlopen(req, timeout=timeout) as r, open(dst, "wb") as f:
+        shutil.copyfileobj(r, f, length=256 * 1024)
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(256 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# Текущее состояние автообновления (для /api/update/status)
+_upd_lock = threading.Lock()
+_upd_state = {"checking": False, "staged": None, "need_full": None, "worker": False}
+
+
+def _detect_staged():
+    """Если updates/pending уже подготовлен прошлым сеансом — узнать версию."""
+    try:
+        with open(os.path.join(UPDATES_DIR, "pending", "update.json"),
+                  encoding="utf-8") as f:
+            v = (json.load(f) or {}).get("version")
+        if v:
+            with _upd_lock:
+                _upd_state["staged"] = v
+    except Exception:
+        pass
+
+
+def stage_payload_zip(zip_path, expect_version=None):
+    """Распаковывает payload-zip в updates/pending (через временную папку).
+    Возвращает (ok, что_случилось): 'staged' | 'need_full' | причина ошибки."""
+    tmp = os.path.join(UPDATES_DIR, "pending-tmp")
+    pending = os.path.join(UPDATES_DIR, "pending")
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp, exist_ok=True)
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            names = z.namelist()
+            # защита от zip-slip: только относительные пути внутри архива
+            for n in names:
+                p = os.path.normpath(n)
+                if p.startswith("..") or os.path.isabs(p):
+                    return False, "подозрительный путь в архиве"
+            z.extractall(tmp)
+        meta_path = os.path.join(tmp, "update.json")
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f) or {}
+        ver = meta.get("version") or ""
+        min_base = meta.get("min_base") or "0.0.0"
+        if expect_version and ver != expect_version:
+            return False, "версия в архиве не совпадает"
+        if ver_newer(min_base, BASE_VERSION):
+            # payload требует более новый загрузчик — нужен полный установщик
+            shutil.rmtree(tmp, ignore_errors=True)
+            with _upd_lock:
+                _upd_state["need_full"] = ver
+                _upd_state["staged"] = None
+            return True, "need_full"
+        shutil.rmtree(pending, ignore_errors=True)
+        os.replace(tmp, pending)
+        with _upd_lock:
+            _upd_state["staged"] = ver
+            _upd_state["need_full"] = None
+        return True, "staged"
+    except Exception as e:  # noqa: BLE001
+        shutil.rmtree(tmp, ignore_errors=True)
+        return False, str(e)
+
+
+def check_and_stage_update():
+    """Одна итерация: узнать последнюю версию, при необходимости скачать
+    и подготовить payload. Все ошибки тихие (офлайн — норма для школ)."""
+    with _upd_lock:
+        if _upd_state["checking"]:
+            return
+        _upd_state["checking"] = True
+    try:
+        latest = fetch_latest_version()
+        if not latest or not ver_newer(latest, VERSION):
+            return
+        with _upd_lock:
+            if _upd_state["staged"] == latest or _upd_state["need_full"] == latest:
+                return                      # уже подготовлено/решено
+        os.makedirs(UPDATES_DIR, exist_ok=True)
+        name = f"payload-{latest}.zip"
+        url_zip = f"{GH_DOWNLOAD_URL}/v{latest}/{name}"
+        url_sha = url_zip + ".sha256"
+        zip_tmp = os.path.join(UPDATES_DIR, name + ".part")
+        try:
+            _download(url_zip, zip_tmp)
+            sha_tmp = zip_tmp + ".sha"
+            _download(url_sha, sha_tmp, timeout=10)
+            with open(sha_tmp, encoding="utf-8", errors="ignore") as f:
+                want = (f.read().split() or [""])[0].strip().lower()
+            os.remove(sha_tmp)
+            if not want or _sha256_file(zip_tmp) != want:
+                return                      # битая загрузка — попробуем в следующий раз
+            stage_payload_zip(zip_tmp, expect_version=latest)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                # у релиза нет payload (например, только полный установщик)
+                with _upd_lock:
+                    _upd_state["need_full"] = latest
+                    _upd_state["staged"] = None
+        finally:
+            try:
+                os.remove(zip_tmp)
+            except OSError:
+                pass
+    except Exception:
+        pass
+    finally:
+        with _upd_lock:
+            _upd_state["checking"] = False
+
+
+def _update_worker():
+    time.sleep(UPDATE_DELAY)
+    while True:
+        check_and_stage_update()
+        time.sleep(UPDATE_PERIOD)
+
+
+def start_update_worker():
+    """Фоновый автоапдейт: в собранном приложении всегда; в dev — только
+    по явному флагу UNI_UPDATE=1 (чтобы не качать релизы на машине разработки)."""
+    if not (IS_FROZEN or os.environ.get("UNI_UPDATE") == "1"):
+        return
+    with _upd_lock:
+        if _upd_state["worker"]:
+            return
+        _upd_state["worker"] = True
+    _detect_staged()
+    threading.Thread(target=_update_worker, daemon=True).start()
+
+
+@app.route("/api/update/status", methods=["GET"])
+def update_status():
+    with _upd_lock:
+        st = dict(_upd_state)
+    return jsonify({
+        "ok": True,
+        "current": VERSION,
+        "staged": st["staged"],          # версия, готовая к применению при перезапуске
+        "need_full": st["need_full"],    # версия, требующая полного установщика
+        "checking": st["checking"],
+        "release_url": GH_LATEST_URL,
+    })
+
+
+@app.route("/api/update/check", methods=["POST"])
+def update_check_now():
+    """Форсированная проверка (для отладки/меню)."""
+    threading.Thread(target=check_and_stage_update, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+# --------------------------------------------------------------------------- #
 # Проверка окружения
 # --------------------------------------------------------------------------- #
 @app.route("/api/env", methods=["GET"])
@@ -1548,6 +1781,7 @@ if __name__ == "__main__":
             pass
 
     ensure_default_sketch()
+    start_update_worker()      # фоновая проверка обновлений (тихая, офлайн-безопасная)
 
     if HAS_WEBVIEW:
         # Flask в фоновом потоке, pywebview держит главный поток

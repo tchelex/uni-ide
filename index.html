@@ -1301,6 +1301,8 @@
     <span class="led" id="envLed"></span><span id="envText">среда</span></div>
   <div class="seg" id="boardSeg">
     <span class="led" id="boardLed"></span><span id="boardText">плата не подключена</span></div>
+  <div class="seg" id="updSeg" style="display:none">
+    <span class="led" id="updLed"></span><span id="updText"></span></div>
   <div id="stMsg"></div>
   <div class="seg" id="verSeg"></div>
 </div>
@@ -1317,11 +1319,13 @@
 <script src="/vendor/codemirror/addon/lint/lint.min.js"></script>
 <script>
 const $ = (s) => document.querySelector(s);
+// Сбой сети/сервера не должен сыпать uncaught-исключения из фоновых опросов
+// (порты каждые 2 с и т.п.) — при ошибке возвращаем null, вызывающие проверяют.
 const api = (url, body) =>
   fetch(url, body
     ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
     : undefined
-  ).then(r => r.json());
+  ).then(r => r.json()).catch(() => null);
 
 /* ---------- current project (per window, identified by absolute .ino path) ---------- */
 const _initPath = new URLSearchParams(location.search).get("path") || null;
@@ -1688,6 +1692,7 @@ function renderEnvSeg() {
 
 async function checkEnv() {
   const e = await api("/api/env");
+  if (!e) return;
   _envOk = !!(e.arduino_cli && e.esp32_core);
   APP_VERSION = e.app_version || "";
   applyWindowTitle();
@@ -1720,7 +1725,9 @@ function setDeviceConnected(on, port) {
 }
 
 async function loadPorts(autoSelect = false) {
-  const { ports } = await api("/api/ports");
+  const r = await api("/api/ports");
+  if (!r || !r.ports) return;          // сервер занят/перезапускается — тихо ждём
+  const ports = r.ports;
   const sel = $("#portSel");
   const prev = sel.value;
   sel.innerHTML = "";
@@ -1769,6 +1776,35 @@ async function loadPorts(autoSelect = false) {
 
 // автоопрос портов каждые 2 секунды
 setInterval(() => loadPorts(true), 2000);
+
+/* ---------- автообновление: тихий чип в статус-баре ---------- */
+// Сервер сам скачивает и готовит обновление; здесь только показываем итог:
+// «готово — перезапустите» (применится загрузчиком при следующем запуске)
+// или «нужен полный установщик» (клик открывает страницу релиза).
+async function checkUpdates() {
+  const u = await api("/api/update/status");
+  const seg = $("#updSeg");
+  if (!u || !u.ok || !seg) return;
+  if (u.staged) {
+    seg.style.display = "";
+    $("#updLed").className = "led on";
+    $("#updText").textContent = "обновление " + u.staged + " готово — перезапустите";
+    seg.title = "Новая версия уже скачана и включится при следующем запуске UNI IDE";
+    seg.style.cursor = "default";
+    seg.onclick = null;
+  } else if (u.need_full) {
+    seg.style.display = "";
+    $("#updLed").className = "led warming";
+    $("#updText").textContent = "доступна " + u.need_full + " — скачать установщик";
+    seg.title = "Это обновление ставится полным установщиком. Нажмите, чтобы открыть страницу загрузки.";
+    seg.style.cursor = "pointer";
+    seg.onclick = () => api("/api/open", { url: u.release_url });
+  } else {
+    seg.style.display = "none";
+  }
+}
+setTimeout(checkUpdates, 60000);              // первая проверка спустя минуту
+setInterval(checkUpdates, 5 * 60000);         // далее — раз в 5 минут
 
 /* ---------- load code ---------- */
 // Применяет открытый проект к UI. Код подменяем только если он реально отличается,
@@ -2249,6 +2285,7 @@ function startMonUI() {
   switchPane("serial");
   monPoll = setInterval(async () => {
     const r = await api("/api/monitor/read");
+    if (!r) return;                    // сеть моргнула — не роняем монитор
     if (r.data) appendSerial(r.data);
     if (!r.on) stopMonUI();
   }, 300);

@@ -29,7 +29,10 @@ build.py — сборка UNI IDE в исполняемое приложение
 import os
 import re
 import sys
+import json
 import shutil
+import hashlib
+import zipfile
 import argparse
 import subprocess
 
@@ -54,13 +57,25 @@ def _read_version():
 
 
 VERSION  = _read_version()  # передаётся в Inno Setup и в имя установщика
+
+# Минимальная версия ПОЛНОЙ установки, на которую применим лёгкий payload-апдейт.
+# Поднимать ТОЛЬКО при несовместимых изменениях bootstrap.py или python-зависимостей
+# (flask/pyserial/pywebview): тогда старые установки увидят «нужен полный установщик».
+PAYLOAD_MIN_BASE = "1.3.0"
+
 DIST_DIR = os.path.join(HERE, "dist", APP_NAME)          # выход PyInstaller (--onedir)
 OUT_DIR  = os.path.join(HERE, "installer-out")           # куда кладём setup.exe
 ISS_FILE = os.path.join(HERE, "installer", "UNI-IDE.iss")
 
-# Ресурсы, которые должны лежать РЯДОМ с exe (server.py читает их из папки exe).
-RES_FILES = ["index.html", "icon.ico", "icon.png", "student-README.txt"]
+# Ресурсы, которые должны лежать РЯДОМ с exe. server.py — тоже обычный файл:
+# exe (bootstrap.py) запускает его с диска, что и делает возможными лёгкие
+# payload-обновления без переустановки.
+RES_FILES = ["server.py", "index.html", "icon.ico", "icon.png", "student-README.txt"]
 RES_DIRS  = ["vendor"]
+
+# Состав payload-обновления (см. bootstrap.py и автоапдейт в server.py).
+PAYLOAD_FILES = ["server.py", "index.html", "icon.ico", "icon.png", "student-README.txt"]
+PAYLOAD_DIRS  = ["vendor"]
 
 # Переносимый тулчейн (создаётся prepare_bundle.py).
 TOOLCHAIN_FILES = ["arduino-cli.exe"]
@@ -128,11 +143,16 @@ def pyinstaller_build():
            "--onedir", "--noconsole", "--name", APP_NAME,
            # pywebview подтягивает свой GUI-бэкенд динамически — забираем целиком
            "--collect-all", "webview",
-           "--collect-submodules", "serial"]
+           "--collect-submodules", "serial",
+           # flask и его свита: bootstrap.py импортирует их явно, но подстрахуемся
+           "--hidden-import", "flask",
+           "--hidden-import", "werkzeug",
+           "--hidden-import", "jinja2"]
     icon = os.path.join(HERE, "icon.ico")
     if os.path.exists(icon):
         cmd += ["--icon", icon]
-    cmd += [os.path.join(HERE, "server.py")]
+    # Вход — тонкий загрузчик; server.py остаётся обычным файлом рядом с exe
+    cmd += [os.path.join(HERE, "bootstrap.py")]
     run(cmd)
 
     if not os.path.isdir(DIST_DIR):
@@ -156,6 +176,39 @@ def copy_resources(dst):
             shutil.copytree(src, dest, ignore=COPY_IGNORE)
         else:
             log("  (пропуск, нет папки) " + d)
+    # версия полной установки — по ней автоапдейт решает, применим ли payload
+    with open(os.path.join(dst, "base-version.txt"), "w", encoding="utf-8") as f:
+        f.write(VERSION)
+
+
+def build_payload():
+    """Собирает лёгкий payload-архив для автообновления установленных копий:
+    installer-out/payload-<версия>.zip (+ .sha256). Внутри — только файлы
+    приложения (server.py, index.html, vendor…) и update.json с версией и
+    минимальной совместимой полной установкой (PAYLOAD_MIN_BASE)."""
+    os.makedirs(OUT_DIR, exist_ok=True)
+    zpath = os.path.join(OUT_DIR, f"payload-{VERSION}.zip")
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in PAYLOAD_FILES:
+            src = os.path.join(HERE, f)
+            if os.path.exists(src):
+                z.write(src, f)
+        for d in PAYLOAD_DIRS:
+            src = os.path.join(HERE, d)
+            for root, _dirs, files in os.walk(src):
+                for fn in files:
+                    p = os.path.join(root, fn)
+                    z.write(p, os.path.relpath(p, HERE))
+        z.writestr("update.json", json.dumps(
+            {"version": VERSION, "min_base": PAYLOAD_MIN_BASE},
+            ensure_ascii=False, indent=2))
+    h = hashlib.sha256()
+    with open(zpath, "rb") as f:
+        for chunk in iter(lambda: f.read(256 * 1024), b""):
+            h.update(chunk)
+    with open(zpath + ".sha256", "w", encoding="utf-8") as f:
+        f.write(h.hexdigest() + "  " + os.path.basename(zpath) + "\n")
+    log("Payload для автообновления: " + zpath)
 
 
 def find_iscc():
@@ -222,6 +275,7 @@ def main():
     log("Копирую ресурсы и тулчейн в бандл...")
     copy_resources(DIST_DIR)
     log("Бандл готов: " + DIST_DIR)
+    build_payload()
 
     if args.no_installer:
         log("Установщик пропущен (--no-installer).")

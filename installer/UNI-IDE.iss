@@ -70,8 +70,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
 
+[InstallDelete]
+; Полный установщик всегда «свежее» уже скачанного фонового обновления:
+; сбрасываем отложенный payload и его бэкап, иначе загрузчик при первом запуске
+; применил бы старую версию поверх только что установленной.
+Type: filesandordirs; Name: "{app}\updates"
+
 [Files]
-; Весь бандл (UNI-IDE.exe, _internal, index.html, vendor, arduino-cli, arduino-data, ...)
+; Весь бандл (UNI-IDE.exe, _internal, server.py, index.html, vendor, arduino-cli, arduino-data, ...)
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; Драйвер CH340: INF-пакет для тихой установки через pnputil (галочка в конце)
 ; + CH341SER.EXE как запасной вариант для ручной установки.
@@ -102,4 +108,5 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
 Type: filesandordirs; Name: "{app}\build-tmp"
 Type: filesandordirs; Name: "{app}\build-cache"
 Type: filesandordirs; Name: "{app}\arduino-downloads"
+Type: filesandordirs; Name: "{app}\updates"
 Type: files; Name: "{app}\uni-ide-log.txt"
