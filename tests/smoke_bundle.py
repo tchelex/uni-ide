@@ -212,13 +212,29 @@ def main():
         print("== остановка сборки", flush=True)
         ino3 = sketch(work, "stopme", BLINK)
         app.post("/api/save", {"code": BLINK, "path": ino3})
-        stream = urllib.request.urlopen(
-            app.url + "/api/compile/stream?path=" + urllib.request.quote(ino3), timeout=600)
-        time.sleep(1.5)                                 # компилятор уже запущен, но ещё не закончил
+        # Поток сборки читаем в фоне, как это делает интерфейс: сервер отдаёт
+        # заголовки ответа только с первой строкой вывода, а молчаливая сборка
+        # может не печатать ничего до самого конца.
+        import threading
+        got = {"tail": ""}
+
+        def _read_stream():
+            try:
+                with urllib.request.urlopen(
+                        app.url + "/api/compile/stream?path=" + urllib.request.quote(ino3),
+                        timeout=600) as st:
+                    got["tail"] = st.read().decode("utf-8", "replace")
+            except Exception as e:  # noqa: BLE001
+                got["tail"] = "ошибка чтения потока: %s" % e
+
+        th = threading.Thread(target=_read_stream, daemon=True)
+        th.start()
+        time.sleep(2)                                   # компилятор уже запущен, но ещё не закончил
         r = app.post("/api/compile/stop", {"path": ino3})
         check("«Стоп» принят", r.get("stopped"))
-        tail = stream.read().decode("utf-8", "replace")
-        stream.close()
+        th.join(timeout=60)
+        check("поток сборки закрылся после «Стоп»", not th.is_alive())
+        tail = got["tail"]
         check("сборка завершилась как отменённая", '"cancelled": true' in tail, tail[-300:])
         time.sleep(3)
         left = compiler_procs()

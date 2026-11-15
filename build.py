@@ -199,7 +199,8 @@ def pyinstaller_build(install_deps=True):
             # только готовые колёса: pip сам возьмёт самую новую версию PyQt6,
             # у которой есть сборка под glibc этой системы (а не полезет
             # компилировать Qt из исходников)
-            pip += ["--only-binary", ":all:"]
+            pip += ["--only-binary",
+                    "PyQt6,PyQt6-Qt6,PyQt6-sip,PyQt6-WebEngine,PyQt6-WebEngine-Qt6"]
         run(pip + python_deps())
 
     # чистим прошлый dist, чтобы не тащить устаревшие файлы

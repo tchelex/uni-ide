@@ -207,9 +207,51 @@ def _factory_stamp():
     return "dev"
 
 
+def system_env(env=None):
+    """Окружение для ВНЕШНИХ программ (arduino-cli, компилятор, браузер).
+    Собранное приложение на Linux запускается с LD_LIBRARY_PATH, указывающим на
+    библиотеки внутри бандла; если его унаследует чужая программа, она подхватит
+    не свои библиотеки и может не запуститься (так ломался системный браузер).
+    Возвращаем значение, которое было до запуска (PyInstaller хранит его в
+    LD_LIBRARY_PATH_ORIG)."""
+    env = dict(os.environ if env is None else env)
+    if IS_LINUX and IS_FROZEN:
+        orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+        if orig:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
+_browser_lock = threading.Lock()
+
+
+def open_browser(url):
+    """webbrowser.open с системным окружением (см. system_env)."""
+    if not (IS_LINUX and IS_FROZEN):
+        return webbrowser.open(url)
+    with _browser_lock:
+        saved = dict(os.environ)
+        try:
+            clean = system_env()
+            for k in ("LD_LIBRARY_PATH", "LD_LIBRARY_PATH_ORIG"):
+                if k in clean:
+                    os.environ[k] = clean[k]
+                else:
+                    os.environ.pop(k, None)
+            return webbrowser.open(url)
+        finally:
+            for k in ("LD_LIBRARY_PATH", "LD_LIBRARY_PATH_ORIG"):
+                if k in saved:
+                    os.environ[k] = saved[k]
+                else:
+                    os.environ.pop(k, None)
+
+
 def cli_env():
     """Окружение для arduino-cli. В бандле указываем переносимые каталоги."""
-    env = dict(os.environ)
+    env = system_env()
     if IS_PORTABLE:
         env["ARDUINO_DIRECTORIES_DATA"] = PORTABLE_DATA
         env["ARDUINO_DIRECTORIES_USER"] = PORTABLE_USER
@@ -755,7 +797,7 @@ def window_new():
             opened = False
     if not opened:
         try:
-            webbrowser.open(url)
+            open_browser(url)
             opened = True
         except Exception:
             opened = False
@@ -769,7 +811,7 @@ def open_external():
     if not (url.startswith("http://") or url.startswith("https://")):
         return jsonify({"ok": False, "log": "Недопустимый URL."})
     try:
-        webbrowser.open(url)
+        open_browser(url)
         return jsonify({"ok": True})
     except Exception as e:  # noqa: BLE001
         return jsonify({"ok": False, "log": str(e)})
@@ -2098,7 +2140,7 @@ if __name__ == "__main__":
     if _attached:
         # другая копия уже работает — показываем её окно, свой сервер не нужен
         if not (HAS_WEBVIEW and run_window()):
-            webbrowser.open(APP_URL)
+            open_browser(APP_URL)
         sys.exit(0)
 
     start_update_worker()      # фоновая проверка обновлений (тихая, офлайн-безопасная)
@@ -2112,10 +2154,10 @@ if __name__ == "__main__":
         t.start()
         if not run_window():
             # окно не открылось — работаем через браузер, сервер уже запущен
-            webbrowser.open(APP_URL)
+            open_browser(APP_URL)
             t.join()
     else:
         # Fallback: открыть в браузере
-        threading.Timer(1.2, lambda: webbrowser.open(APP_URL)).start()
+        threading.Timer(1.2, lambda: open_browser(APP_URL)).start()
         print("UNI IDE -> " + APP_URL)
         start_flask()
