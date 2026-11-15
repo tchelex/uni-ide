@@ -159,7 +159,9 @@ jobs:
       - name: Проверка окна приложения
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb
+          # libEGL/libGL — часть видеодрайвера: на любом настольном Linux они есть,
+          # в бандл их класть нельзя, а на серверном раннере их нет
+          sudo apt-get install -y -qq xvfb libegl1 libgl1 libopengl0
           QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu" \
             xvfb-run -a -s "-screen 0 1280x800x24" \
             python tests/smoke_window.py dist/UNI-IDE/UNI-IDE
