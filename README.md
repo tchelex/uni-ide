@@ -9,23 +9,33 @@
 компиляция и прошивка идут через `arduino-cli`, который внутри сам вызывает
 `esptool` (тот самый пайплайн `bootloader.bin / partitions.bin / firmware.bin`).
 
-## ⬇️ Скачать (Windows)
+## ⬇️ Скачать (Windows, macOS, Linux)
 
-Готовый установщик — на странице релизов:
+Готовые сборки — на странице релизов:
 
 ### [→ Скачать последнюю версию UNI IDE](https://github.com/tchelex/uni-ide/releases/latest)
 
-Ставится **без прав администратора**; на последнем шаге можно установить драйвер
-CH340 для платы. Памятка ученику — [student-README.txt](student-README.txt).
+| Система | Файл | Установка |
+|---|---|---|
+| Windows 10/11 (64-бит) | `UNI-IDE-Setup-<версия>.exe` | Запустить. Без прав администратора; на последнем шаге можно поставить драйвер CH340 |
+| macOS, Apple Silicon (M1 и новее) | `UNI-IDE-<версия>-macos-arm64.dmg` | Открыть образ, перетащить UNI-IDE в «Программы». Первый запуск — см. «ПРОЧТИ МЕНЯ» в образе |
+| macOS, Intel | `UNI-IDE-<версия>-macos-x64.dmg` | То же |
+| Linux x86_64 (glibc 2.28+) | `UNI-IDE-<версия>-linux-x86_64.tar.xz` | Распаковать и выполнить `./install.sh` |
+
+Во всех сборках компилятор ESP32 уже внутри (интернет на занятии не нужен), и все
+они обновляются сами одним и тем же лёгким `payload-<версия>.zip` из релиза.
+Памятка ученику — [student-README.txt](student-README.txt).
 Сборка из исходников описана ниже.
 
 ```
 uni-ide/
 ├── server.py             # backend (Flask + arduino-cli)
 ├── index.html            # интерфейс (CodeMirror)
-├── build.py              # сборка exe + установщика (Windows)
+├── build.py              # сборка под текущую ОС: exe+установщик / .dmg / .tar.xz
+├── bootstrap.py          # тонкий загрузчик (вход собранного приложения)
+├── .github/workflows/    # сборка macOS и Linux в GitHub Actions
 ├── prepare_bundle.py     # разовое «запекание» офлайн-тулчейна ESP32
-├── installer/UNI-IDE.iss # скрипт установщика (Inno Setup)
+├── installer/            # Inno Setup (Windows), install.sh (Linux), памятка (macOS)
 ├── requirements.txt
 └── Uni_Sketches/         # создаётся автоматически — проекты учеников
     └── uni_sketch1/uni_sketch1.ino
