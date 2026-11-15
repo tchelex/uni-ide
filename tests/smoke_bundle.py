@@ -214,7 +214,7 @@ def main():
         app.post("/api/save", {"code": BLINK, "path": ino3})
         stream = urllib.request.urlopen(
             app.url + "/api/compile/stream?path=" + urllib.request.quote(ino3), timeout=600)
-        time.sleep(6)                                   # компилятор успел раскрутиться
+        time.sleep(1.5)                                 # компилятор уже запущен, но ещё не закончил
         r = app.post("/api/compile/stop", {"path": ino3})
         check("«Стоп» принят", r.get("stopped"))
         tail = stream.read().decode("utf-8", "replace")

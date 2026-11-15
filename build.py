@@ -194,7 +194,13 @@ def make_icns():
 def pyinstaller_build(install_deps=True):
     """Собирает бандл PyInstaller: onedir на Windows/Linux, .app на macOS."""
     if install_deps:
-        run([sys.executable, "-m", "pip", "install", "--upgrade"] + python_deps())
+        pip = [sys.executable, "-m", "pip", "install", "--upgrade"]
+        if IS_LINUX:
+            # только готовые колёса: pip сам возьмёт самую новую версию PyQt6,
+            # у которой есть сборка под glibc этой системы (а не полезет
+            # компилировать Qt из исходников)
+            pip += ["--only-binary", ":all:"]
+        run(pip + python_deps())
 
     # чистим прошлый dist, чтобы не тащить устаревшие файлы
     if os.path.isdir(DIST_ROOT):
