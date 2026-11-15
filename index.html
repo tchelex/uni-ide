@@ -1993,8 +1993,25 @@ async function loadPorts(autoSelect = false) {
   }
   sel.value = target;
 
+  // Linux: порт виден, но у пользователя нет прав на него (нет группы dialout) —
+  // прошивка упала бы с «Permission denied». Подсказываем один раз на порт.
+  const tp = ports.find(p => p.addr === target);
+  if (tp && tp.access === false) {
+    sel.title = "Нет прав на порт " + tp.addr;
+    if (!_portAccessWarned.has(tp.addr)) {
+      _portAccessWarned.add(tp.addr);
+      logLine($("#console"), "✗ Плата найдена на " + tp.addr + ", но у пользователя нет прав на этот порт.", "err");
+      logLine($("#console"), "  Один раз выполните в терминале:  sudo usermod -aG dialout $USER", "err");
+      logLine($("#console"), "  и перезайдите в систему (или запустите install.sh из архива UNI IDE — он настроит доступ).", "err");
+      setStatus("нет прав на порт " + tp.addr);
+    }
+  } else {
+    sel.title = "COM-порт";
+  }
+
   _knownPorts = new Set(addrs);
 }
+const _portAccessWarned = new Set();
 
 // автоопрос портов каждые 2 секунды
 setInterval(() => loadPorts(true), 2000);
@@ -2360,7 +2377,7 @@ async function newSketch() {
   setStatus("создан проект " + r.name);
 }
 
-// Открыть проект — системное окно Windows, можно выбрать любой .ino на диске.
+// Открыть проект — системное окно выбора файла, можно выбрать любой .ino на диске.
 async function openDialog() {
   await saveCurrent();
   const r = await api("/api/dialog/open", {});
