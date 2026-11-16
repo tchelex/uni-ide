@@ -1,0 +1,188 @@
+# Сборка UNI IDE под macOS и Linux.
+#
+# Windows-установщик и payload автообновления собираются локально (python build.py),
+# а образы macOS (.dmg) и архив Linux (.tar.xz) — здесь: своего Mac для этого не нужно.
+#
+# Когда запускается:
+#   * при публикации релиза — готовые файлы сами прикрепляются к этому релизу;
+#   * вручную (Actions → «Сборка macOS и Linux» → Run workflow) — файлы лежат
+#     в артефактах запуска;
+#   * в pull request, который трогает код приложения или сборку, — как проверка.
+#
+# Каждая сборка проверяется на собранном приложении (tests/smoke_bundle.py):
+# офлайн-компиляция настоящим тулчейном, кэш повторной сборки, «Стоп», автообновление.
+name: Сборка macOS и Linux
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+  push:
+    branches: ["feature/cross-platform"]   # отладка сборки в ветке; после слияния в main можно убрать
+  pull_request:
+    paths:
+      - "server.py"
+      - "bootstrap.py"
+      - "build.py"
+      - "prepare_bundle.py"
+      - "index.html"
+      - "installer/**"
+      - "tests/**"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: write        # прикрепить файлы к релизу
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Версии тулчейна — те же, что в Windows-установщике. Меняйте вместе с ним.
+  UNI_CLI_VERSION: "1.5.1"
+  UNI_ESP32_CORE: "3.3.10"
+  UNI_LIB_REF: "v1.1.0"
+  TOOLCHAIN_CACHE: "v1"
+  PYTHONUTF8: "1"
+
+jobs:
+  # --------------------------------------------------------------------------
+  macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64          # Apple Silicon (M1 и новее)
+            runner: macos-15
+          - arch: x64            # Intel
+            runner: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Кэш тулчейна ESP32
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            arduino-cli
+            arduino-data
+            arduino-user
+          key: toolchain-macos-${{ matrix.arch }}-${{ env.UNI_CLI_VERSION }}-${{ env.UNI_ESP32_CORE }}-${{ env.UNI_LIB_REF }}-${{ env.TOOLCHAIN_CACHE }}
+
+      - name: Тулчейн ESP32 и библиотеки
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          python prepare_bundle.py --libs --prune
+          rm -rf arduino-downloads
+
+      - name: Юнит-тесты
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install flask pyserial
+          python -m unittest discover -s tests -v
+
+      - name: Сборка .app и .dmg
+        run: python build.py
+
+      - name: Проверка собранного приложения
+        run: python tests/smoke_bundle.py dist/UNI-IDE.app/Contents/MacOS/UNI-IDE
+
+      - name: Проверка окна приложения
+        run: python tests/smoke_window.py dist/UNI-IDE.app/Contents/MacOS/UNI-IDE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UNI-IDE-macos-${{ matrix.arch }}
+          path: installer-out/*.dmg
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Прикрепить к релизу
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" installer-out/*.dmg --clobber
+
+  # --------------------------------------------------------------------------
+  linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Кэш тулчейна ESP32
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            arduino-cli
+            arduino-data
+            arduino-user
+          key: toolchain-linux-x86_64-${{ env.UNI_CLI_VERSION }}-${{ env.UNI_ESP32_CORE }}-${{ env.UNI_LIB_REF }}-${{ env.TOOLCHAIN_CACHE }}
+
+      - name: Тулчейн ESP32 и библиотеки
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          python prepare_bundle.py --libs --prune
+          rm -rf arduino-downloads
+
+      - name: Юнит-тесты
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install flask pyserial
+          python -m unittest discover -s tests -v
+
+      # Собираем в AlmaLinux 8 (glibc 2.28), а не на самом раннере (glibc 2.35):
+      # программа, собранная на старой системе, запускается и на новых, но не
+      # наоборот. Так сборка работает и на Astra Linux 1.7, РЕД ОС 7.3, Альт 10.
+      - name: Сборка бандла и архива (в AlmaLinux 8)
+        run: |
+          docker run --rm -v "$PWD":/src -w /src \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            almalinux:8 bash installer/linux/ci-build.sh
+
+      - name: Проверка собранного приложения
+        run: python tests/smoke_bundle.py dist/UNI-IDE/UNI-IDE
+
+      - name: Проверка окна приложения
+        run: |
+          sudo apt-get update -qq
+          # libEGL/libGL — часть видеодрайвера: на любом настольном Linux они есть,
+          # в бандл их класть нельзя, а на серверном раннере их нет
+          sudo apt-get install -y -qq xvfb libegl1 libgl1 libopengl0
+          QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu" \
+            xvfb-run -a -s "-screen 0 1280x800x24" \
+            python tests/smoke_window.py dist/UNI-IDE/UNI-IDE
+
+      - name: Проверка install.sh
+        run: |
+          mkdir /tmp/unpack && tar -C /tmp/unpack -xJf installer-out/*.tar.xz
+          cd /tmp/unpack/UNI-IDE-*
+          HOME=/tmp/fakehome UNI_IDE_HOME=/tmp/fakehome/opt/UNI-IDE sh -c 'mkdir -p "$HOME" && ./install.sh --no-serial'
+          test -x /tmp/fakehome/opt/UNI-IDE/UNI-IDE
+          test -f /tmp/fakehome/.local/share/applications/uni-ide.desktop
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UNI-IDE-linux-x86_64
+          path: installer-out/*.tar.xz
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Прикрепить к релизу
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" installer-out/*.tar.xz --clobber

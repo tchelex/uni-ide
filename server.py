@@ -40,24 +40,45 @@ def base_dir():
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
-BASE = base_dir()
 IS_FROZEN = getattr(sys, "frozen", False)
+IS_WIN   = sys.platform == "win32"
+IS_MAC   = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
+
+# Три роли каталогов. На Windows (и в режиме разработки) это ОДНА папка рядом
+# с exe/скриптом — так было всегда, и установленные копии на это рассчитывают.
+# На macOS и Linux приложение лежит там, куда писать нельзя (.app в /Applications,
+# подпись бандла, каталог только для чтения), поэтому загрузчик (bootstrap.py)
+# разводит роли через переменные окружения:
+#   UNI_APP_DIR   — payload: server.py, index.html, vendor, sim, image (обновляемый);
+#   UNI_TOOL_DIR  — заводская часть: arduino-cli, arduino-data, arduino-user,
+#                   base-version.txt (только чтение);
+#   UNI_STATE_DIR — всё изменяемое: обновления, кэш сборки, библиотеки, настройки.
+_LEGACY_BASE = base_dir()
+BASE      = os.environ.get("UNI_APP_DIR")   or _LEGACY_BASE
+TOOL_DIR  = os.environ.get("UNI_TOOL_DIR")  or _LEGACY_BASE
+STATE_DIR = os.environ.get("UNI_STATE_DIR") or _LEGACY_BASE
+SPLIT_LAYOUT = os.path.normcase(os.path.abspath(STATE_DIR)) != \
+               os.path.normcase(os.path.abspath(TOOL_DIR))
 
 # Переносимый тулчейн (присутствует только в подготовленном бандле)
-PORTABLE_DATA = os.path.join(BASE, "arduino-data")
-PORTABLE_USER = os.path.join(BASE, "arduino-user")
-PORTABLE_DL   = os.path.join(BASE, "arduino-downloads")
-IS_PORTABLE   = os.path.isdir(PORTABLE_DATA)
+FACTORY_DATA  = os.path.join(TOOL_DIR, "arduino-data")
+FACTORY_USER  = os.path.join(TOOL_DIR, "arduino-user")
+PORTABLE_DATA = os.path.join(STATE_DIR, "arduino-data")
+PORTABLE_USER = os.path.join(STATE_DIR, "arduino-user")
+PORTABLE_DL   = os.path.join(STATE_DIR, "arduino-downloads")
+IS_PORTABLE   = os.path.isdir(FACTORY_DATA)
 
-# Иконка окна/приложения (рядом со скриптом или exe)
-ICON_PATH = os.path.join(BASE, "icon.ico")
+# Иконка окна/приложения (рядом со скриптом или exe). .ico понимает только
+# Windows; GTK/Qt на Linux берут png, на macOS иконку окна задаёт сам .app.
+ICON_PATH = os.path.join(BASE, "icon.ico" if IS_WIN else "icon.png")
 
 # Плата зафиксирована: ESP32 Dev Module
 FQBN = "esp32:esp32:esp32"
 
 # Версия приложения — единый источник. build.py читает её отсюда (regex), она же
 # уходит в заголовок окна и в /api/env. Меняем версию правкой ТОЛЬКО этой строки.
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # --------------------------------------------------------------------------- #
 # 2D-симулятор — экспериментальная функция, ВЫКЛЮЧЕНА по умолчанию.
@@ -70,29 +91,167 @@ VERSION = "1.4.0"
 def _sim_enabled():
     if os.environ.get("UNI_SIM", "").strip().lower() in ("1", "true", "yes", "on"):
         return True
-    return os.path.exists(os.path.join(BASE, "sim-enabled.txt"))
+    return any(os.path.exists(os.path.join(d, "sim-enabled.txt"))
+               for d in (BASE, STATE_DIR))
 
 SIM_ENABLED = _sim_enabled()
 
 # Постоянный кэш сборки — ядро и библиотеки компилируются один раз
-BUILD_CACHE = os.path.join(BASE, "build-cache")
-BUILD_PATH  = os.path.join(BASE, "build-tmp")
+BUILD_CACHE = os.path.join(STATE_DIR, "build-cache")
+BUILD_PATH  = os.path.join(STATE_DIR, "build-tmp")
 
 
 def resolve_cli():
-    """Бандл: arduino-cli.exe рядом. Иначе — системный из PATH."""
+    """Бандл: arduino-cli(.exe) в заводской папке. Иначе — системный из PATH."""
     for name in ("arduino-cli.exe", "arduino-cli"):
-        p = os.path.join(BASE, name)
-        if os.path.exists(p):
+        p = os.path.join(TOOL_DIR, name)
+        if os.path.isfile(p):
             return p
     return os.environ.get("ARDUINO_CLI", "arduino-cli")
 
 ARDUINO_CLI = resolve_cli()
 
 
+def _same_link(link, target):
+    try:
+        return os.path.islink(link) and os.readlink(link) == target
+    except OSError:
+        return False
+
+
+def _copy_tree_over(src, dst):
+    """Копирует src поверх dst (существующие файлы заменяются, лишние остаются)."""
+    for root, _dirs, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        out = dst if rel == "." else os.path.join(dst, rel)
+        os.makedirs(out, exist_ok=True)
+        for fn in files:
+            shutil.copy2(os.path.join(root, fn), os.path.join(out, fn))
+
+
+def prepare_portable_dirs():
+    """macOS/Linux: собирает изменяемые каталоги arduino-cli в STATE_DIR.
+
+    Тулчейн (гигабайты компилятора и ядра ESP32) лежит в заводской папке только
+    для чтения, а arduino-cli хочет писать в свой data-каталог (индексы,
+    inventory.yaml). Копировать гигабайты при первом запуске нельзя, поэтому
+    делаем «ферму ссылок»: STATE_DIR/arduino-data — настоящая папка, в ней
+    большие подпапки (packages и т.п.) — симлинки на заводские, а мелкие файлы
+    индексов — копии. Ссылки пересоздаются при каждом старте: приложение могли
+    перенести, а macOS при запуске из «Загрузок» каждый раз подставляет новый путь.
+
+    Встроенные библиотеки (UNI, Adafruit…) копируются в STATE_DIR/arduino-user —
+    туда же потом ставятся библиотеки из менеджера. При новой полной установке
+    встроенные библиотеки обновляются, установленные учеником — не трогаются.
+
+    На Windows и в dev-режиме каталоги не разделены — ничего не делает."""
+    if not (SPLIT_LAYOUT and IS_PORTABLE):
+        return
+    try:
+        os.makedirs(PORTABLE_DATA, exist_ok=True)
+        for name in os.listdir(FACTORY_DATA):
+            src = os.path.join(FACTORY_DATA, name)
+            dst = os.path.join(PORTABLE_DATA, name)
+            if os.path.isdir(src):
+                if name in ("tmp", "staging"):
+                    continue                      # рабочие каталоги cli — создаст сам
+                if _same_link(dst, src):
+                    continue
+                if os.path.islink(dst):
+                    os.remove(dst)                # ссылка на старое место приложения
+                elif os.path.isdir(dst):
+                    shutil.rmtree(dst, ignore_errors=True)
+                elif os.path.exists(dst):
+                    os.remove(dst)
+                os.symlink(src, dst, target_is_directory=True)
+            elif not os.path.exists(dst):
+                shutil.copy2(src, dst)
+    except Exception as e:  # noqa: BLE001
+        print("prepare_portable_dirs: arduino-data:", e)
+
+    try:
+        stamp_path = os.path.join(STATE_DIR, "libs-seeded.txt")
+        try:
+            with open(stamp_path, encoding="utf-8") as f:
+                seeded = f.read().strip()
+        except Exception:
+            seeded = ""
+        stamp = _factory_stamp()
+        libs_src = os.path.join(FACTORY_USER, "libraries")
+        libs_dst = os.path.join(PORTABLE_USER, "libraries")
+        os.makedirs(libs_dst, exist_ok=True)
+        if os.path.isdir(libs_src):
+            for name in os.listdir(libs_src):
+                src = os.path.join(libs_src, name)
+                dst = os.path.join(libs_dst, name)
+                if not os.path.isdir(src):
+                    continue
+                if not os.path.isdir(dst) or seeded != stamp:
+                    _copy_tree_over(src, dst)
+        with open(stamp_path, "w", encoding="utf-8") as f:
+            f.write(stamp)
+    except Exception as e:  # noqa: BLE001
+        print("prepare_portable_dirs: arduino-user:", e)
+
+
+def _factory_stamp():
+    """Отпечаток полной установки: build-id.txt (пишет build.py), иначе версия."""
+    for name in ("build-id.txt", "base-version.txt"):
+        try:
+            with open(os.path.join(TOOL_DIR, name), encoding="utf-8") as f:
+                v = f.read().strip()
+            if v:
+                return v
+        except Exception:
+            pass
+    return "dev"
+
+
+def system_env(env=None):
+    """Окружение для ВНЕШНИХ программ (arduino-cli, компилятор, браузер).
+    Собранное приложение на Linux запускается с LD_LIBRARY_PATH, указывающим на
+    библиотеки внутри бандла; если его унаследует чужая программа, она подхватит
+    не свои библиотеки и может не запуститься (так ломался системный браузер).
+    Возвращаем значение, которое было до запуска (PyInstaller хранит его в
+    LD_LIBRARY_PATH_ORIG)."""
+    env = dict(os.environ if env is None else env)
+    if IS_LINUX and IS_FROZEN:
+        orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+        if orig:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
+_browser_lock = threading.Lock()
+
+
+def open_browser(url):
+    """webbrowser.open с системным окружением (см. system_env)."""
+    if not (IS_LINUX and IS_FROZEN):
+        return webbrowser.open(url)
+    with _browser_lock:
+        saved = dict(os.environ)
+        try:
+            clean = system_env()
+            for k in ("LD_LIBRARY_PATH", "LD_LIBRARY_PATH_ORIG"):
+                if k in clean:
+                    os.environ[k] = clean[k]
+                else:
+                    os.environ.pop(k, None)
+            return webbrowser.open(url)
+        finally:
+            for k in ("LD_LIBRARY_PATH", "LD_LIBRARY_PATH_ORIG"):
+                if k in saved:
+                    os.environ[k] = saved[k]
+                else:
+                    os.environ.pop(k, None)
+
+
 def cli_env():
     """Окружение для arduino-cli. В бандле указываем переносимые каталоги."""
-    env = dict(os.environ)
+    env = system_env()
     if IS_PORTABLE:
         env["ARDUINO_DIRECTORIES_DATA"] = PORTABLE_DATA
         env["ARDUINO_DIRECTORIES_USER"] = PORTABLE_USER
@@ -101,7 +260,11 @@ def cli_env():
 
 
 def writable_workspace():
-    """Папка для скетча. Рядом с exe, если можно писать; иначе — в LOCALAPPDATA."""
+    """Папка для настроек и журнала. Рядом с exe, если можно писать; иначе —
+    в LOCALAPPDATA. На macOS/Linux — каталог состояния, выбранный загрузчиком."""
+    if SPLIT_LAYOUT:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        return STATE_DIR
     try:
         t = os.path.join(BASE, ".w_test")
         with open(t, "w") as f:
@@ -117,7 +280,10 @@ WORKSPACE      = writable_workspace()
 # Папка по умолчанию для новых проектов. Каждый проект — отдельная папка
 # <имя>/<имя>.ino (как в Arduino). Но проект можно открыть/сохранить ГДЕ УГОДНО
 # на диске — идентичность проекта определяется абсолютным путём к .ino.
-SKETCHBOOK        = os.path.join(WORKSPACE, "Uni_Sketches")
+# На Windows проекты лежат рядом с программой (как раньше); на macOS/Linux —
+# в домашней папке, чтобы ученик мог найти их в Finder/файловом менеджере.
+SKETCHBOOK        = os.path.join(
+    os.path.expanduser("~") if SPLIT_LAYOUT else WORKSPACE, "Uni_Sketches")
 NEW_SKETCH_PREFIX = "uni_sketch"
 DEFAULT_SKETCH    = NEW_SKETCH_PREFIX + "1"
 RECENT_FILE       = os.path.join(WORKSPACE, "uni-ide-recent.json")
@@ -334,11 +500,27 @@ NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 # Пониженный приоритет для фоновых сборок: на Windows дочерние процессы
 # (gcc и т.п.) наследуют этот класс — прогрев не забивает ЦП слабых машин.
 BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) if sys.platform == "win32" else 0
+# На macOS/Linux тот же эффект даёт запуск через nice (приоритет наследуют дети).
+_NICE = None if IS_WIN else shutil.which("nice")
+
+
+def _popen_extra():
+    """Платформенные параметры запуска arduino-cli.
+    Windows — без консольного окна. macOS/Linux — в отдельной группе процессов,
+    чтобы «Стоп» мог снять всё дерево (gcc, esptool) одним сигналом."""
+    if IS_WIN:
+        return {"creationflags": NO_WINDOW}
+    return {"start_new_session": True}
 
 def run_cli(args, timeout=900, nice=False):
     """Запуск arduino-cli. Возвращает (ok, stdout, stderr).
     nice=True — пониженный приоритет (для фонового прогрева)."""
     cmd = [ARDUINO_CLI] + args
+    extra = {}
+    if IS_WIN:
+        extra["creationflags"] = NO_WINDOW | (BELOW_NORMAL if nice else 0)
+    elif nice and _NICE:
+        cmd = [_NICE, "-n", "10"] + cmd
     try:
         p = subprocess.run(
             cmd,
@@ -348,13 +530,13 @@ def run_cli(args, timeout=900, nice=False):
             encoding="utf-8",
             errors="replace",
             env=cli_env(),
-            creationflags=NO_WINDOW | (BELOW_NORMAL if nice else 0),
+            **extra,
         )
         return p.returncode == 0, p.stdout or "", p.stderr or ""
     except FileNotFoundError:
         return False, "", (
-            "arduino-cli не найден. В бандле он должен лежать рядом с UNI-IDE.exe; "
-            "в режиме разработки — быть в PATH. См. README."
+            "arduino-cli не найден. В установленной программе он входит в комплект; "
+            "в режиме разработки — должен быть в PATH. См. README."
         )
     except subprocess.TimeoutExpired:
         return False, "", "Превышено время ожидания операции."
@@ -602,7 +784,7 @@ def window_new():
     body = request.json or {}
     ino = resolve_sketch_path(body.get("path")) or ensure_default_sketch()
     name = sketch_name_of(ino)
-    url = "http://127.0.0.1:5000/?path=" + quote(ino)
+    url = APP_URL + "/?path=" + quote(ino)
     opened = False
     if HAS_WEBVIEW:
         try:
@@ -615,7 +797,7 @@ def window_new():
             opened = False
     if not opened:
         try:
-            webbrowser.open(url)
+            open_browser(url)
             opened = True
         except Exception:
             opened = False
@@ -629,7 +811,7 @@ def open_external():
     if not (url.startswith("http://") or url.startswith("https://")):
         return jsonify({"ok": False, "log": "Недопустимый URL."})
     try:
-        webbrowser.open(url)
+        open_browser(url)
         return jsonify({"ok": True})
     except Exception as e:  # noqa: BLE001
         return jsonify({"ok": False, "log": str(e)})
@@ -661,6 +843,33 @@ def _is_ch340(port_info):
 # Плюс кэш с TTL + single-flight — на случай частых опросов.
 _ports_cache = {"t": 0.0, "data": None}
 _ports_lock = threading.Lock()
+
+# Имена USB-UART устройств на macOS/Linux (CH340, CP210x, FTDI, встроенный USB ESP32)
+_USB_SERIAL_HINTS = ("usbserial", "usbmodem", "wchusb", "slab_usb", "ttyusb", "ttyacm")
+
+
+def _is_board_port(port_info):
+    """Отсекает «порты», которые платой быть не могут. На Windows список COM и
+    так короткий — не трогаем. На macOS pyserial показывает Bluetooth-Incoming-Port,
+    debug-console и т.п., на Linux — встроенные ttyS*: оставляем только USB."""
+    if IS_WIN:
+        return True
+    if getattr(port_info, "vid", None) is not None:
+        return True
+    dev = (getattr(port_info, "device", "") or "").lower()
+    return any(h in dev for h in _USB_SERIAL_HINTS)
+
+
+def _port_access(dev):
+    """Может ли текущий пользователь открыть порт. На Linux порт принадлежит
+    группе dialout/uucp — без неё плата видна, но прошивка падает с
+    «Permission denied». Отдаём флаг в UI, чтобы подсказать заранее."""
+    if IS_WIN:
+        return True
+    try:
+        return os.access(dev, os.R_OK | os.W_OK)
+    except Exception:
+        return True
 
 
 def _ports_via_cli():
@@ -694,10 +903,13 @@ def ports():
 
         if HAS_PYSERIAL:
             for p in list_ports.comports():
+                if not _is_board_port(p):
+                    continue
                 found[p.device] = {
                     "addr": p.device,
                     "ch340": _is_ch340(p),
                     "desc": p.description or "",
+                    "access": _port_access(p.device),
                 }
         else:
             found = _ports_via_cli()
@@ -867,7 +1079,8 @@ _procs_guard = threading.Lock()
 def _kill_tree(proc):
     """Убивает arduino-cli вместе с дочерними процессами (gcc/esptool).
     proc.terminate() снял бы только сам arduino-cli, а тяжёлые дети остались бы
-    молотить ЦП — поэтому на Windows валим всё дерево через taskkill /T."""
+    молотить ЦП — поэтому на Windows валим всё дерево через taskkill /T,
+    а на macOS/Linux шлём сигнал всей группе процессов (см. _popen_extra)."""
     if proc is None or proc.poll() is not None:
         return
     try:
@@ -875,7 +1088,21 @@ def _kill_tree(proc):
             subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                            capture_output=True, creationflags=NO_WINDOW)
         else:
-            proc.terminate()
+            import signal
+            try:
+                pgid = os.getpgid(proc.pid)
+            except Exception:
+                pgid = None
+            # группу трогаем, только если она своя (процесс запущен нами через
+            # start_new_session) — иначе сигнал ушёл бы и самой IDE
+            if pgid is not None and pgid == proc.pid:
+                os.killpg(pgid, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    os.killpg(pgid, signal.SIGKILL)
+            else:
+                proc.terminate()
     except Exception:
         pass
     try:
@@ -925,7 +1152,7 @@ def _stream_cli(args, bp=None, on_stop=None):
             encoding="utf-8",
             errors="replace",
             env=cli_env(),
-            creationflags=NO_WINDOW,
+            **_popen_extra(),
         )
     except FileNotFoundError:
         yield "data: " + _json.dumps({"line": "arduino-cli не найден.", "done": True, "ok": False}) + "\n\n"
@@ -1534,7 +1761,7 @@ import urllib.error
 GH_OWNER, GH_REPO = "tchelex", "uni-ide"
 GH_LATEST_URL   = f"https://github.com/{GH_OWNER}/{GH_REPO}/releases/latest"
 GH_DOWNLOAD_URL = f"https://github.com/{GH_OWNER}/{GH_REPO}/releases/download"
-UPDATES_DIR   = os.path.join(BASE, "updates")
+UPDATES_DIR   = os.path.join(STATE_DIR, "updates")
 UPDATE_PERIOD = 4 * 3600          # сек между фоновыми проверками
 UPDATE_DELAY  = 30                # сек после старта до первой проверки
 
@@ -1542,7 +1769,7 @@ UPDATE_DELAY  = 30                # сек после старта до перв
 def _read_base_version():
     """Версия ПОЛНОЙ установки (пишет build.py в бандл). В dev — VERSION."""
     try:
-        with open(os.path.join(BASE, "base-version.txt"), encoding="utf-8") as f:
+        with open(os.path.join(TOOL_DIR, "base-version.txt"), encoding="utf-8") as f:
             return f.read().strip()
     except Exception:
         return VERSION
@@ -1772,6 +1999,7 @@ def env():
         "app_version": VERSION,
         "simulator": SIM_ENABLED,
         "fqbn": FQBN,
+        "platform": "windows" if IS_WIN else "macos" if IS_MAC else "linux",
     })
 
 
@@ -1782,8 +2010,59 @@ except ImportError:
     HAS_WEBVIEW = False
 
 
+# Адрес локального сервера. 5000 — исторический порт; на Windows он не меняется.
+# На macOS его часто занимает «Приёмник AirPlay», поэтому там и на Linux при
+# занятом порте берём любой свободный (см. choose_port).
+APP_PORT = 5000
+APP_URL  = "http://127.0.0.1:5000"
+
+
+def _port_is_free(port):
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def _our_server_on(port, timeout=1.5):
+    """True, если на порту уже отвечает другая копия UNI IDE."""
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/update/status", timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        return isinstance(data, dict) and "current" in data and "release_url" in data
+    except Exception:
+        return False
+
+
+def choose_port():
+    """Выбирает порт сервера. Возвращает (порт, уже_запущена_другая_копия).
+    Windows: всегда 5000 — повторный запуск открывает окно к уже работающей
+    копии (так было всегда). macOS/Linux: 5000, если свободен; если его держит
+    другая копия IDE — подключаемся к ней; если чужая программа — свободный порт."""
+    forced = os.environ.get("UNI_PORT", "").strip()
+    if forced.isdigit():
+        return int(forced), False          # явный порт (автотесты сборки)
+    if IS_WIN or _port_is_free(5000):
+        return 5000, False
+    if _our_server_on(5000):
+        return 5000, True
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1], False
+    finally:
+        s.close()
+
+
 def start_flask():
-    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
+    app.run(host="127.0.0.1", port=APP_PORT, debug=False, threaded=True)
 
 
 def set_taskbar_app_id():
@@ -1800,44 +2079,85 @@ def set_taskbar_app_id():
             pass
 
 
-if __name__ == "__main__":
-    set_taskbar_app_id()
+def _webview_gui():
+    """Движок окна. Linux-сборка несёт с собой Qt WebEngine (не зависит от
+    того, что установлено в дистрибутиве); загрузчик сообщает об этом через
+    PYWEBVIEW_GUI. На Windows/macOS pywebview сам берёт системный движок."""
+    return os.environ.get("PYWEBVIEW_GUI") or None
 
-    # В собранном .exe без консоли пишем ошибки в лог-файл
-    if IS_FROZEN:
-        try:
-            logf = open(os.path.join(WORKSPACE, "uni-ide-log.txt"), "w", encoding="utf-8")
-            sys.stdout = logf
-            sys.stderr = logf
-        except Exception:
-            pass
 
-    ensure_default_sketch()
-    start_update_worker()      # фоновая проверка обновлений (тихая, офлайн-безопасная)
-
-    if HAS_WEBVIEW:
-        # Flask в фоновом потоке, pywebview держит главный поток
-        t = threading.Thread(target=start_flask, daemon=True)
-        t.start()
+def run_window():
+    """Открывает окно приложения. False — окно создать не удалось
+    (нет движка, нет графической сессии): вызывающий откроет браузер."""
+    try:
         webview.create_window(
             "UNI IDE",
-            "http://127.0.0.1:5000",
+            APP_URL,
             width=1280,
             height=800,
             min_size=(900, 600),
             maximized=True,
         )
-        # Иконка окна → отображается в заголовке (верхний левый угол),
-        # на панели задач и в Диспетчере задач Windows.
-        if os.path.exists(ICON_PATH):
+        kw = {}
+        gui = _webview_gui()
+        if gui:
+            kw["gui"] = gui
+        # Иконка окна → заголовок, панель задач, Диспетчер задач (Windows, Linux).
+        if os.path.exists(ICON_PATH) and not IS_MAC:
             try:
-                webview.start(icon=ICON_PATH)
+                webview.start(icon=ICON_PATH, **kw)
+                return True
             except TypeError:
-                webview.start()   # старые версии pywebview без параметра icon
-        else:
-            webview.start()
+                pass              # старые версии pywebview без параметра icon
+        webview.start(**kw)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print("Окно приложения не открылось:", e, flush=True)
+        return False
+
+
+if __name__ == "__main__":
+    set_taskbar_app_id()
+
+    # В собранном приложении без консоли пишем ошибки в лог-файл
+    if IS_FROZEN:
+        try:
+            logf = open(os.path.join(WORKSPACE, "uni-ide-log.txt"), "w",
+                        encoding="utf-8", buffering=1)      # построчно — журнал не теряется
+            sys.stdout = logf
+            sys.stderr = logf
+        except Exception:
+            pass
+
+    prepare_portable_dirs()    # macOS/Linux: изменяемые каталоги arduino-cli
+    ensure_default_sketch()
+
+    APP_PORT, _attached = choose_port()
+    APP_URL = f"http://127.0.0.1:{APP_PORT}"
+    # UNI_HEADLESS=1 — только сервер, без окна и браузера (автотесты сборки)
+    _headless = os.environ.get("UNI_HEADLESS") == "1"
+
+    if _attached:
+        # другая копия уже работает — показываем её окно, свой сервер не нужен
+        if not (HAS_WEBVIEW and run_window()):
+            open_browser(APP_URL)
+        sys.exit(0)
+
+    start_update_worker()      # фоновая проверка обновлений (тихая, офлайн-безопасная)
+
+    if _headless:
+        print("UNI IDE (headless) -> " + APP_URL, flush=True)
+        start_flask()
+    elif HAS_WEBVIEW:
+        # Flask в фоновом потоке, pywebview держит главный поток
+        t = threading.Thread(target=start_flask, daemon=True)
+        t.start()
+        if not run_window():
+            # окно не открылось — работаем через браузер, сервер уже запущен
+            open_browser(APP_URL)
+            t.join()
     else:
         # Fallback: открыть в браузере
-        threading.Timer(1.2, lambda: webbrowser.open("http://127.0.0.1:5000")).start()
-        print("UNI IDE -> http://127.0.0.1:5000")
+        threading.Timer(1.2, lambda: open_browser(APP_URL)).start()
+        print("UNI IDE -> " + APP_URL)
         start_flask()
