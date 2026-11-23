@@ -40,8 +40,21 @@
   Чтобы открывалось собственное окно, на Ubuntu/Debian поставьте:
        sudo apt install libxcb-cursor0
 
+* Программа сразу падает при запуске («Could not initialize GLX»,
+  «Failed to finding matching FBConfig», SIGABRT — бывает на AMD + свежей
+  Mesa или под Wayland):
+  начиная с этой версии загрузчик сам замечает такое падение и перезапускает
+  программу в режиме программного рендеринга (медленнее, но надёжно).
+  Если всё же нужно вручную:
+    — запуск навсегда в программном режиме:   UNI_IDE_GL=software ./UNI-IDE
+    — наоборот, только аппаратный (для теста): UNI_IDE_GL=hardware ./UNI-IDE
+  Журнал запусков (приложите его к сообщению о проблеме):
+       ~/.local/state/uni-ide/launch.log
+
 * Требуется 64-битный Linux с glibc 2.28 или новее
   (Ubuntu 20.04+, Debian 10+, Astra Linux 1.7+, Альт 10+, РЕД ОС 7.3+).
+  Системные библиотеки OpenGL/EGL (есть на любом настольном Linux —
+  ставятся вместе с видеодрайвером).
 
 Удаление:  ~/.local/opt/UNI-IDE/uninstall.sh
 (проекты в ~/Uni_Sketches не удаляются)

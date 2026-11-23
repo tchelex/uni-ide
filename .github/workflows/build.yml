@@ -153,15 +153,31 @@ jobs:
             -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
             almalinux:8 bash installer/linux/ci-build.sh
 
+      - name: Проверка бандла (видеодрайверный стек не попал в бандл)
+        run: |
+          # libdrm/libglvnd/Mesa из бандла затеняют системные драйверы и ломают
+          # запуск на свежих системах (issue #2) — build.py обязан их вычистить
+          if find dist/UNI-IDE/_internal -maxdepth 1 -type f \
+              \( -name 'libdrm*' -o -name 'libgbm*' -o -name 'libglapi*' \
+              -o -name 'libxshmfence*' -o -name 'libGL.so*' -o -name 'libGLX*' \
+              -o -name 'libEGL.so*' -o -name 'libGLdispatch*' \
+              -o -name 'libOpenGL*' -o -name 'libGLESv2*' \) | grep .; then
+            echo "ОШИБКА: в бандле системный графический стек" >&2
+            exit 1
+          fi
+          test -x dist/UNI-IDE/UNI-IDE.bin   # настоящий бинарь
+          head -1 dist/UNI-IDE/UNI-IDE | grep -q bash   # вход — обёртка-загрузчик
+
       - name: Проверка собранного приложения
         run: python tests/smoke_bundle.py dist/UNI-IDE/UNI-IDE
 
       - name: Проверка окна приложения
         run: |
           sudo apt-get update -qq
-          # libEGL/libGL — часть видеодрайвера: на любом настольном Linux они есть,
-          # в бандл их класть нельзя, а на серверном раннере их нет
-          sudo apt-get install -y -qq xvfb libegl1 libgl1 libopengl0
+          # libEGL/libGL и весь драйверный стек — часть видеодрайвера: на любом
+          # настольном Linux они есть, в бандл их класть нельзя (build.py их
+          # вычищает), а на серверном раннере их нет — ставим системные
+          sudo apt-get install -y -qq xvfb libegl1 libgl1 libopengl0 libgles2 libdrm2 libgbm1
           QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu" \
             xvfb-run -a -s "-screen 0 1280x800x24" \
             python tests/smoke_window.py dist/UNI-IDE/UNI-IDE
