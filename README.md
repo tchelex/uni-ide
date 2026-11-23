@@ -197,6 +197,14 @@ python -m unittest discover -s tests -v
   для чтения, а обновления, кэш сборки и библиотеки — в каталоге пользователя
   (`~/Library/Application Support/UNI-IDE` или `~/.local/share/UNI-IDE`);
   проекты — в `~/Uni_Sketches`. Схема описана в шапке `bootstrap.py`.
+- **Linux: графический стек системный.** В бандл не входят `libdrm`, `libGL`,
+  `libEGL` и прочий драйверный стек — иначе старые копии затеняют драйверы
+  целевой системы, и на свежих Mesa (AMD/radeonsi, Intel) приложение падает
+  с `Could not initialize GLX` (см. issue #2). Вычисткой занимается
+  `build.py` (`prune_linux_graphics_stack`), а входной файл Linux-бандла —
+  обёртка `installer/linux/UNI-IDE.sh`: при падении графики на старте она
+  сама перезапускает программу в программном рендеринге (принудительно —
+  `UNI_IDE_GL=software`; журнал — `~/.local/state/uni-ide/launch.log`).
 - **macOS без подписи Apple.** При первом запуске нужно подтверждение в
   «Конфиденциальность и безопасность» — см. `installer/macos/ПРОЧТИ МЕНЯ.txt`.
 
