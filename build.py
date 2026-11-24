@@ -104,13 +104,13 @@ LAUNCHER_SRC = os.path.join(LINUX_DIR, "UNI-IDE.sh")
 # Ресурсы приложения. server.py — тоже обычный файл: загрузчик (bootstrap.py)
 # запускает его с диска, что и делает возможными лёгкие payload-обновления
 # без переустановки.
-RES_FILES = ["server.py", "index.html", "icon.ico", "icon.png", "student-README.txt"]
+RES_FILES = ["server.py", "index.html", "i18n.js", "icon.ico", "icon.png", "student-README.txt"]
 # vendor — CodeMirror и шрифты; sim — модули 2D-симулятора; image — мнемосхемы
 # конструктора (UniBase/UniDev) для конфигуратора исполнителя.
 RES_DIRS  = ["vendor", "sim", "image"]
 
 # Состав payload-обновления (см. bootstrap.py и автоапдейт в server.py).
-PAYLOAD_FILES = ["server.py", "index.html", "icon.ico", "icon.png", "student-README.txt"]
+PAYLOAD_FILES = ["server.py", "index.html", "i18n.js", "icon.ico", "icon.png", "student-README.txt"]
 PAYLOAD_DIRS  = ["vendor", "sim", "image"]
 
 # Переносимый тулчейн (создаётся prepare_bundle.py).

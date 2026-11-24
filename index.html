@@ -1344,6 +1344,12 @@
         <button id="fontInc" title="Увеличить">+</button>
       </div>
       <div class="toolbar-sep"></div>
+      <label>Язык:</label>
+      <select id="langSelect">
+        <option value="ru">Русский</option>
+        <option value="en">English</option>
+      </select>
+      <div class="toolbar-sep"></div>
       <button class="fmt-btn" id="formatBtn" title="Форматировать код: отступы и пробелы">
         <svg viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="13" y2="12"/><line x1="4" y1="18" x2="17" y2="18"/></svg>Format
       </button>
@@ -1536,11 +1542,23 @@
 <script src="/vendor/codemirror/addon/edit/matchbrackets.min.js"></script>
 <script src="/vendor/codemirror/addon/hint/show-hint.min.js"></script>
 <script src="/vendor/codemirror/addon/lint/lint.min.js"></script>
+<script src="/i18n.js"></script>
 <!-- модули 2D-симулятора (отдаются сервером из папки sim/) -->
 <!-- модули 2D-симулятора грузятся динамически и только если он включён
      на сервере (см. SIM_ENABLED в server.py) — см. bootSimulator() ниже -->
 <script>
 const $ = (s) => document.querySelector(s);
+
+/* локаль интерфейса (i18n.js): перевод статической разметки и переключатель
+   языка. Динамические строки переводятся через t() в местах создания. */
+if (window.UNI_I18N) {
+  UNI_I18N.applyI18n(document.body);
+  const _langSel = document.getElementById("langSelect");
+  if (_langSel) {
+    _langSel.value = UNI_I18N.getLang();
+    _langSel.addEventListener("change", () => UNI_I18N.setLang(_langSel.value));
+  }
+}
 // Сбой сети/сервера не должен сыпать uncaught-исключения из фоновых опросов
 // (порты каждые 2 с и т.п.) — при ошибке возвращаем null, вызывающие проверяют.
 const api = (url, body) =>
@@ -1573,7 +1591,7 @@ function _cmLint(text) {
   let openLine = 0, openCh = 0;
   const stack = [];
   const PAIR = { "}": "{", ")": "(", "]": "[" };
-  const NAME = { "{": "фигурная скобка «}»", "(": "круглая скобка «)»", "[": "квадратная скобка «]»" };
+  const NAME = { "{": t("фигурная скобка «}»"), "(": t("круглая скобка «)»"), "[": t("квадратная скобка «]»") };
   const adv = () => { if (text[i] === "\n") { line++; ch = 0; } else ch++; i++; };
   const mark = (msg, l, c, len) => anns.push({ message: msg, severity: "error", from: P(l, c), to: P(l, c + (len || 1)) });
   while (i < n) {
@@ -1582,13 +1600,13 @@ function _cmLint(text) {
     if (inBlock) { if (c === "*" && c2 === "/") { adv(); adv(); inBlock = false; } else adv(); continue; }
     if (inStr) {
       if (c === "\\") { adv(); adv(); continue; }
-      if (c === "\n") { mark('Не закрыта кавычка «"»', openLine, openCh); inStr = false; adv(); continue; }
+      if (c === "\n") { mark(t('Не закрыта кавычка «"»'), openLine, openCh); inStr = false; adv(); continue; }
       if (c === '"') inStr = false;
       adv(); continue;
     }
     if (inChar) {
       if (c === "\\") { adv(); adv(); continue; }
-      if (c === "\n") { mark("Не закрыт символ «'»", openLine, openCh); inChar = false; adv(); continue; }
+      if (c === "\n") { mark(t("Не закрыт символ «'»"), openLine, openCh); inChar = false; adv(); continue; }
       if (c === "'") inChar = false;
       adv(); continue;
     }
@@ -1600,17 +1618,17 @@ function _cmLint(text) {
     if (c === "}" || c === ")" || c === "]") {
       const open = stack.pop();
       if (!open || open.c !== PAIR[c]) {
-        mark("Лишняя или несогласованная скобка «" + c + "»", line, ch);
+        mark(t("Лишняя или несогласованная скобка «") + c + "»", line, ch);
         if (open && open.c !== PAIR[c]) stack.push(open);   // несовпавшую открывающую не «съедаем»
       }
       adv(); continue;
     }
     adv();
   }
-  if (inBlock) mark("Не закрыт комментарий «/*»", openLine, openCh, 2);
-  else if (inStr) mark('Не закрыта кавычка «"»', openLine, openCh);
-  else if (inChar) mark("Не закрыт символ «'»", openLine, openCh);
-  for (const o of stack) mark("Не закрыта " + (NAME[o.c] || "скобка"), o.line, o.ch);
+  if (inBlock) mark(t("Не закрыт комментарий «/*»"), openLine, openCh, 2);
+  else if (inStr) mark(t('Не закрыта кавычка «"»'), openLine, openCh);
+  else if (inChar) mark(t("Не закрыт символ «'»"), openLine, openCh);
+  for (const o of stack) mark(t("Не закрыта ") + (NAME[o.c] || t("скобка")), o.line, o.ch);
   return anns;
 }
 
@@ -1906,10 +1924,10 @@ let _warmNow = "";            // "", "warming", "ready" — состояние �
 
 function renderEnvSeg() {
   const led = $("#envLed"), txt = $("#envText");
-  if (_envOk === false)            { led.className = "led off";     txt.textContent = "среда: ошибка"; }
-  else if (_warmNow === "warming") { led.className = "led warming"; txt.textContent = "среда: готовится…"; }
-  else if (_envOk)                 { led.className = "led on";      txt.textContent = "среда: готова"; }
-  else                             { led.className = "led";         txt.textContent = "среда"; }
+  if (_envOk === false)            { led.className = "led off";     txt.textContent = t("среда: ошибка"); }
+  else if (_warmNow === "warming") { led.className = "led warming"; txt.textContent = t("среда: готовится…"); }
+  else if (_envOk)                 { led.className = "led on";      txt.textContent = t("среда: готова"); }
+  else                             { led.className = "led";         txt.textContent = t("среда"); }
 }
 
 async function checkEnv() {
@@ -1920,16 +1938,16 @@ async function checkEnv() {
   applyWindowTitle();
   $("#verSeg").textContent = APP_VERSION ? "UNI IDE " + APP_VERSION : "";
   $("#envSeg").title = [
-    "arduino-cli: " + (e.arduino_cli ? "найден" : "НЕ найден"),
-    "ядро esp32: " + (e.esp32_core ? "установлено" : "НЕ установлено"),
-    "serial-порт (pyserial): " + (e.pyserial ? "доступен" : "недоступен"),
+    "arduino-cli: " + (e.arduino_cli ? t("найден") : t("НЕ найден")),
+    t("ядро esp32: ") + (e.esp32_core ? t("установлено") : t("НЕ установлено")),
+    t("serial-порт (pyserial): ") + (e.pyserial ? t("доступен") : t("недоступен")),
     e.version || "",
   ].filter(Boolean).join("\n");
   renderEnvSeg();
   if (!e.arduino_cli)
-    logLine($("#console"), "⚠ arduino-cli не найден — см. README, раздел установки.", "err");
+    logLine($("#console"), t("⚠ arduino-cli не найден — см. README, раздел установки."), "err");
   else if (!e.esp32_core)
-    logLine($("#console"), "⚠ Ядро esp32:esp32 не установлено. Выполните: arduino-cli core install esp32:esp32", "err");
+    logLine($("#console"), t("⚠ Ядро esp32:esp32 не установлено. Выполните: arduino-cli core install esp32:esp32"), "err");
 }
 
 let _knownPorts = new Set();
@@ -1939,11 +1957,11 @@ function setDeviceConnected(on, port) {
   const b = $("#deviceBadge");
   b.classList.toggle("connected", on);
   b.title = on
-    ? "UniBase подключён" + (port ? " · " + port : "")
-    : "UniBase не подключён";
+    ? t("UniBase подключён") + (port ? " · " + port : "")
+    : t("UniBase не подключён");
   // сегмент «плата» в статус-баре (серый — просто не подключена, это не ошибка)
   $("#boardLed").className = "led" + (on ? " on" : "");
-  $("#boardText").textContent = on ? "UniBase на " + port : "плата не подключена";
+  $("#boardText").textContent = on ? t("UniBase на ") + port : t("плата не подключена");
 }
 
 async function loadPorts(autoSelect = false) {
@@ -1955,7 +1973,7 @@ async function loadPorts(autoSelect = false) {
   sel.innerHTML = "";
 
   if (!ports.length) {
-    sel.innerHTML = "<option value=''>нет портов</option>";
+    sel.innerHTML = t("<option value=''>нет портов</option>");
     _knownPorts = new Set();
     setDeviceConnected(false);
     return;
@@ -1997,16 +2015,16 @@ async function loadPorts(autoSelect = false) {
   // прошивка упала бы с «Permission denied». Подсказываем один раз на порт.
   const tp = ports.find(p => p.addr === target);
   if (tp && tp.access === false) {
-    sel.title = "Нет прав на порт " + tp.addr;
+    sel.title = t("Нет прав на порт ") + tp.addr;
     if (!_portAccessWarned.has(tp.addr)) {
       _portAccessWarned.add(tp.addr);
-      logLine($("#console"), "✗ Плата найдена на " + tp.addr + ", но у пользователя нет прав на этот порт.", "err");
-      logLine($("#console"), "  Один раз выполните в терминале:  sudo usermod -aG dialout $USER", "err");
-      logLine($("#console"), "  и перезайдите в систему (или запустите install.sh из архива UNI IDE — он настроит доступ).", "err");
-      setStatus("нет прав на порт " + tp.addr);
+      logLine($("#console"), t("✗ Плата найдена на ") + tp.addr + t(", но у пользователя нет прав на этот порт."), "err");
+      logLine($("#console"), t("  Один раз выполните в терминале:  sudo usermod -aG dialout $USER"), "err");
+      logLine($("#console"), t("  и перезайдите в систему (или запустите install.sh из архива UNI IDE — он настроит доступ)."), "err");
+      setStatus(t("нет прав на порт ") + tp.addr);
     }
   } else {
-    sel.title = "COM-порт";
+    sel.title = t("COM-порт");
   }
 
   _knownPorts = new Set(addrs);
@@ -2027,15 +2045,15 @@ async function checkUpdates() {
   if (u.staged) {
     seg.style.display = "";
     $("#updLed").className = "led on";
-    $("#updText").textContent = "обновление " + u.staged + " готово — перезапустите";
-    seg.title = "Новая версия уже скачана и включится при следующем запуске UNI IDE";
+    $("#updText").textContent = t("обновление ") + u.staged + t(" готово — перезапустите");
+    seg.title = t("Новая версия уже скачана и включится при следующем запуске UNI IDE");
     seg.style.cursor = "default";
     seg.onclick = null;
   } else if (u.need_full) {
     seg.style.display = "";
     $("#updLed").className = "led warming";
-    $("#updText").textContent = "доступна " + u.need_full + " — скачать установщик";
-    seg.title = "Это обновление ставится полным установщиком. Нажмите, чтобы открыть страницу загрузки.";
+    $("#updText").textContent = t("доступна ") + u.need_full + t(" — скачать установщик");
+    seg.title = t("Это обновление ставится полным установщиком. Нажмите, чтобы открыть страницу загрузки.");
     seg.style.cursor = "pointer";
     seg.onclick = () => api("/api/open", { url: u.release_url });
   } else {
@@ -2112,14 +2130,14 @@ async function loadCode() {
 
 /* ---------- progress ---------- */
 const COMPILE_STAGES = [
-  { re: /Compiling sketch/i,            pct: 10, label: "Компиляция скетча…" },
-  { re: /Compiling libraries/i,         pct: 30, label: "Компиляция библиотек…" },
-  { re: /Compiling core/i,              pct: 50, label: "Компиляция ядра ESP32…" },
-  { re: /Linking everything/i,          pct: 75, label: "Линковка…" },
-  { re: /Sketch uses/i,                 pct: 88, label: "Готово, проверка размера…" },
-  { re: /Connecting|esptool/i,          pct: 90, label: "Подключение к плате…" },
-  { re: /Writing at|Flash.*%/i,         pct: null, label: "Запись прошивки…" },
-  { re: /Leaving|Hash of data verified/i, pct: 98, label: "Проверка прошивки…" },
+  { re: /Compiling sketch/i,            pct: 10, label: t("Компиляция скетча…") },
+  { re: /Compiling libraries/i,         pct: 30, label: t("Компиляция библиотек…") },
+  { re: /Compiling core/i,              pct: 50, label: t("Компиляция ядра ESP32…") },
+  { re: /Linking everything/i,          pct: 75, label: t("Линковка…") },
+  { re: /Sketch uses/i,                 pct: 88, label: t("Готово, проверка размера…") },
+  { re: /Connecting|esptool/i,          pct: 90, label: t("Подключение к плате…") },
+  { re: /Writing at|Flash.*%/i,         pct: null, label: t("Запись прошивки…") },
+  { re: /Leaving|Hash of data verified/i, pct: 98, label: t("Проверка прошивки…") },
 ];
 
 // arduino-cli в нашем режиме НЕ печатает промежуточные строки во время
@@ -2147,7 +2165,7 @@ function progressStart(indeterminate = false) {
     return;
   }
   w.classList.remove("indeterminate");
-  setProgress(2, "Компиляция…");
+  setProgress(2, t("Компиляция…"));
   const est = Math.min(180000, Math.max(8000, parseInt(localStorage.getItem(PROG_KEY) || "40000")));
   _progStart = Date.now();
   _progTimer = setInterval(() => {
@@ -2169,7 +2187,7 @@ function progressDone(ok, cancelled = false) {
     }
   }
   _progStart = 0;
-  setProgress(ok ? 100 : 60, ok ? "Готово" : cancelled ? "Остановлено" : "Ошибка");
+  setProgress(ok ? 100 : 60, ok ? t("Готово") : cancelled ? t("Остановлено") : t("Ошибка"));
   setTimeout(() => {
     $("#progressWrap").classList.remove("active", "indeterminate");
     $("#progressStage").classList.remove("active");
@@ -2182,10 +2200,10 @@ function progressDone(ok, cancelled = false) {
 function applyStage(line) {
   for (const s of COMPILE_STAGES) {
     if (s.re.test(line)) {
-      if (s.label === "Запись прошивки…") {              // esptool: Writing at 0x… (N %) — реальный %
+      if (s.label === t("Запись прошивки…")) {              // esptool: Writing at 0x… (N %) — реальный %
         const m = line.match(/\((\d+)\s*%\)/);
         const flash = m ? Math.round(90 + parseInt(m[1]) * 0.08) : 92;
-        const lbl = `Запись прошивки… ${m ? m[1] + "%" : ""}`;
+        const lbl = t("Запись прошивки… %s", m ? m[1] + "%" : "");
         if (flash > _progPct) setProgress(flash, lbl); else $("#progressStage").textContent = lbl;
       } else if (s.pct !== null) {
         if (s.pct > _progPct) setProgress(s.pct, s.label); else $("#progressStage").textContent = s.label;
@@ -2232,7 +2250,7 @@ function runStream(url, { onStart, onDone }) {
       if (d.done) finish(d.ok, !!d.cancelled);
     };
     _es.onerror = () => {
-      logLine($("#console"), "✗ Потеряно соединение со сервером.", "err");
+      logLine($("#console"), t("✗ Потеряно соединение со сервером."), "err");
       finish(false, _stopRequested);
     };
   });
@@ -2243,8 +2261,8 @@ async function stopBuild() {
   if (!_building || _stopRequested) return;
   _stopRequested = true;
   $("#stopBtn").disabled = true;
-  logLine($("#console"), "⏹ Останавливаю…", "sys");
-  setStatus("остановка…");
+  logLine($("#console"), t("⏹ Останавливаю…"), "sys");
+  setStatus(t("остановка…"));
   try { await api("/api/compile/stop", { path: currentPath || "" }); } catch (_) {}
   // Подстраховка: если поток не закрылся за 2 c (напр. ещё идёт прогрев),
   // завершаем его сами — сервер уже помечен на отмену и тяжёлую сборку не начнёт.
@@ -2255,19 +2273,19 @@ async function stopBuild() {
 async function verify() {
   clearConsole();
   switchPane("console");
-  logLine($("#console"), "→ Компиляция (esp32:esp32:esp32)…", "sys");
-  setWorking(true); setStatus("компиляция…");
+  logLine($("#console"), t("→ Компиляция (esp32:esp32:esp32)…"), "sys");
+  setWorking(true); setStatus(t("компиляция…"));
   progressStart();
 
   await api("/api/save", { code: editor.getValue(), path: currentPath });
   const ok = await runStream(`/api/compile/stream?path=${encodeURIComponent(currentPath || "")}`, {
     onDone: (ok, cancelled) => {
       logLine($("#console"),
-        cancelled ? "⏹ Компиляция остановлена." : ok ? "✓ Компиляция успешна." : "✗ Ошибка компиляции.",
+        cancelled ? t("⏹ Компиляция остановлена.") : ok ? t("✓ Компиляция успешна.") : t("✗ Ошибка компиляции."),
         cancelled ? "sys" : ok ? "ok" : "err");
       progressDone(ok, cancelled);
       setWorking(false);
-      setStatus(cancelled ? "остановлено" : ok ? "готово" : "ошибка");
+      setStatus(cancelled ? t("остановлено") : ok ? t("готово") : t("ошибка"));
     },
   });
 }
@@ -2275,13 +2293,13 @@ async function verify() {
 async function upload() {
   const port = $("#portSel").value;
   if (!port) {
-    setStatus("выберите порт"); switchPane("console");
-    logLine($("#console"), "✗ Сначала выберите COM-порт.", "err"); return;
+    setStatus(t("выберите порт")); switchPane("console");
+    logLine($("#console"), t("✗ Сначала выберите COM-порт."), "err"); return;
   }
   clearConsole();
   switchPane("console");
-  logLine($("#console"), `→ Компиляция и прошивка на ${port}…`, "sys");
-  setWorking(true); setStatus("прошивка…");
+  logLine($("#console"), t("→ Компиляция и прошивка на %s…", port), "sys");
+  setWorking(true); setStatus(t("прошивка…"));
   progressStart();
 
   await api("/api/save", { code: editor.getValue(), path: currentPath });
@@ -2290,14 +2308,14 @@ async function upload() {
       // Различаем стадию: если до прошивки не дошло (компиляция не прошла) —
       // это ошибка в КОДЕ, а не в проводе. Иначе — проблема порта/платы.
       const compileFailed = !ok && !cancelled && !(info && info.compiled);
-      const msg = cancelled ? "⏹ Прошивка остановлена."
-        : ok ? "✓ Прошивка завершена."
-        : compileFailed ? "✗ Ошибка компиляции — исправьте код (подробности выше)."
-        : "✗ Ошибка загрузки. Проверьте порт/кабель (на части плат держите BOOT).";
+      const msg = cancelled ? t("⏹ Прошивка остановлена.")
+        : ok ? t("✓ Прошивка завершена.")
+        : compileFailed ? t("✗ Ошибка компиляции — исправьте код (подробности выше).")
+        : t("✗ Ошибка загрузки. Проверьте порт/кабель (на части плат держите BOOT).");
       logLine($("#console"), msg, cancelled ? "sys" : ok ? "ok" : "err");
       progressDone(ok, cancelled);
       setWorking(false);
-      setStatus(cancelled ? "остановлено" : ok ? "загружено" : compileFailed ? "ошибка компиляции" : "ошибка");
+      setStatus(cancelled ? t("остановлено") : ok ? t("загружено") : compileFailed ? t("ошибка компиляции") : t("ошибка"));
     },
   });
 }
@@ -2351,7 +2369,7 @@ async function handleMenu(act) {
 
 async function openWindow(path) {
   const r = await api("/api/window/new", { path });
-  setStatus(r.ok ? "открыто новое окно" : "не удалось открыть окно");
+  setStatus(r.ok ? t("открыто новое окно") : t("не удалось открыть окно"));
 }
 
 /* ---------- modal ---------- */
@@ -2372,9 +2390,9 @@ overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(
 async function newSketch() {
   await saveCurrent();
   const r = await api("/api/sketch/new", {});
-  if (!r || !r.ok) { setStatus("не удалось создать проект"); return; }
+  if (!r || !r.ok) { setStatus(t("не удалось создать проект")); return; }
   setActiveSketch(r.path, r.name, r.code);
-  setStatus("создан проект " + r.name);
+  setStatus(t("создан проект ") + r.name);
 }
 
 // Открыть проект — системное окно выбора файла, можно выбрать любой .ino на диске.
@@ -2382,9 +2400,9 @@ async function openDialog() {
   await saveCurrent();
   const r = await api("/api/dialog/open", {});
   if (!r || r.cancelled) return;
-  if (!r.ok) { setStatus(r.log || "не удалось открыть"); return; }
+  if (!r.ok) { setStatus(r.log || t("не удалось открыть")); return; }
   setActiveSketch(r.path, r.name, r.code);
-  setStatus("открыт " + r.name);
+  setStatus(t("открыт ") + r.name);
 }
 
 // Сохранить как — системное окно Windows, задаёт новое имя файла и папки.
@@ -2392,9 +2410,9 @@ async function saveAs() {
   await saveCurrent();
   const r = await api("/api/dialog/saveas", { code: editor.getValue(), name: currentName });
   if (!r || r.cancelled) return;
-  if (!r.ok) { setStatus(r.log || "не удалось сохранить"); return; }
+  if (!r.ok) { setStatus(r.log || t("не удалось сохранить")); return; }
   setActiveSketch(r.path, r.name);   // код тот же — не подменяем
-  setStatus("сохранено как " + r.name);
+  setStatus(t("сохранено как ") + r.name);
 }
 
 // Список последних проектов в меню «Файл».
@@ -2404,7 +2422,7 @@ async function renderRecent() {
   const r = await api("/api/recent");
   const items = (r && r.recent) || [];
   if (!items.length) {
-    box.innerHTML = `<div class="recent-empty">пока нет</div>`;
+    box.innerHTML = t(`<div class="recent-empty">пока нет</div>`);
     return;
   }
   box.innerHTML = "";
@@ -2424,10 +2442,10 @@ async function renderRecent() {
         await saveCurrent();
         currentPath = it.path;
         await loadCode();
-        setStatus("открыт " + it.name);
+        setStatus(t("открыт ") + it.name);
       });
     } else if (!it.exists) {
-      row.title = "файл не найден";
+      row.title = t("файл не найден");
     }
     box.appendChild(row);
   });
@@ -2440,9 +2458,9 @@ async function openExample(ex) {
   closeMenu();
   await saveCurrent();
   const r = await api("/api/example/open", { path: ex.path });
-  if (!r || !r.ok) { setStatus((r && r.log) || "не удалось открыть пример"); return; }
+  if (!r || !r.ok) { setStatus((r && r.log) || t("не удалось открыть пример")); return; }
   setActiveSketch(r.path, r.name, r.code);
-  setStatus("открыт пример: " + r.name + " (копия)");
+  setStatus(t("открыт пример: ") + r.name + t(" (копия)"));
 }
 
 async function loadExamples(force) {
@@ -2451,7 +2469,7 @@ async function loadExamples(force) {
   const r = await api("/api/examples");
   const libs = (r && r.libs) || [];
   if (!libs.length) {
-    box.innerHTML = `<div class="ex-empty">примеры не найдены</div>`;
+    box.innerHTML = t(`<div class="ex-empty">примеры не найдены</div>`);
     _examplesLoaded = true;
     return;
   }
@@ -2479,7 +2497,7 @@ async function loadExamples(force) {
       const it = document.createElement("div");
       it.className = "ex-item";
       it.textContent = ex.name;
-      it.title = "Открыть копию примера: " + ex.path;
+      it.title = t("Открыть копию примера: ") + ex.path;
       it.addEventListener("click", (e) => { e.stopPropagation(); openExample(ex); });
       items.appendChild(it);
     });
@@ -2510,16 +2528,16 @@ async function serialToggle() {
     stopMonUI();
   } else {
     const port = $("#portSel").value;
-    if (!port) { setStatus("выберите порт"); return; }
+    if (!port) { setStatus(t("выберите порт")); return; }
     const r = await api("/api/monitor/start", { port, baud: $("#baudSel").value });
     if (r.ok) startMonUI();
-    else logLine($("#serialLog"), "✗ " + (r.log || "не удалось открыть порт"), "err");
+    else logLine($("#serialLog"), "✗ " + (r.log || t("не удалось открыть порт")), "err");
   }
 }
 function startMonUI() {
   monOn = true;
   _serialAtLineStart = true;          // новая сессия — первая строка с меткой
-  $("#serialToggle").textContent = "Отключить";
+  $("#serialToggle").textContent = t("Отключить");
   $("#serialToggle").classList.add("active");
   switchPane("serial");
   monPoll = setInterval(async () => {
@@ -2570,7 +2588,7 @@ function appendSerial(text) {
 function stopMonUI() {
   monOn = false;
   clearInterval(monPoll);
-  $("#serialToggle").textContent = "Подключить";
+  $("#serialToggle").textContent = t("Подключить");
   $("#serialToggle").classList.remove("active");
 }
 async function serialSend() {
@@ -2617,7 +2635,7 @@ function plotParseLine(line) {
     let name = null, val = NaN;
     const kv = p.match(/^([^:=]+)[:=](-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$/);
     if (kv) { name = kv[1]; val = parseFloat(kv[2]); }
-    else if (_PLOT_NUM.test(p)) { idx++; name = "значение " + idx; val = parseFloat(p); }
+    else if (_PLOT_NUM.test(p)) { idx++; name = t("значение ") + idx; val = parseFloat(p); }
     if (name === null || !isFinite(val)) continue;    // нечисловые строки — не для графика
     let s = _plotSeries[name];
     if (!s) {
@@ -2738,7 +2756,7 @@ let _installedLibs = [];
 let _acEnabled = new Set();   // библиотеки, чьи методы подмешаны в подсказки
 
 async function loadInstalled() {
-  $("#libInstalled").innerHTML = "<div class='lib-item desc'>загрузка…</div>";
+  $("#libInstalled").innerHTML = t("<div class='lib-item desc'>загрузка…</div>");
   const [r, ac] = await Promise.all([api("/api/libs"), api("/api/autocomplete/libs")]);
   _installedLibs = r.libs || [];
   _acEnabled = new Set((ac && ac.enabled) || []);
@@ -2760,26 +2778,26 @@ function renderInstalled() {
     ? (f ? `${libs.length}/${_installedLibs.length}` : `${_installedLibs.length}`)
     : "";
 
-  if (!_installedLibs.length) { box.innerHTML = "<div class='lib-item desc'>пусто</div>"; return; }
-  if (!libs.length) { box.innerHTML = "<div class='lib-item desc'>ничего не найдено</div>"; return; }
+  if (!_installedLibs.length) { box.innerHTML = t("<div class='lib-item desc'>пусто</div>"); return; }
+  if (!libs.length) { box.innerHTML = t("<div class='lib-item desc'>ничего не найдено</div>"); return; }
 
   box.innerHTML = "";
   libs.forEach(l => {
     const arch = (l.architectures || []).map(a => `<span class="lib-chip">${esc(a)}</span>`).join("");
-    const exs  = (l.examples || []).length ? `<span class="lib-chip">${l.examples.length} прим.</span>` : "";
-    const loc  = l.location === "user" ? "пользователь"
-               : l.location === "platform" ? "платформа"
+    const exs  = (l.examples || []).length ? t("<span class=\"lib-chip\">%s прим.</span>", l.examples.length) : "";
+    const loc  = l.location === "user" ? t("пользователь")
+               : l.location === "platform" ? t("платформа")
                : (l.location || "");
     const web  = l.website
-      ? `<a class="lib-web" href="${esc(l.website)}" target="_blank" rel="noopener">сайт ↗</a>` : "";
+      ? t("<a class=\"lib-web\" href=\"%s\" target=\"_blank\" rel=\"noopener\">сайт ↗</a>", esc(l.website)) : "";
     const d = document.createElement("div");
     d.className = "lib-item";
     d.innerHTML =
       `<div class="lib-head">` +
         `<div class="name">${esc(l.name)} <span>v${esc(l.version) || "?"}</span></div>` +
-        `<label class="lib-ac" title="Добавлять методы этой библиотеки в подсказки кода">` +
+        t(`<label class="lib-ac" title="Добавлять методы этой библиотеки в подсказки кода">`) +
           `<input type="checkbox" ${_acEnabled.has(l.name) ? "checked" : ""}>` +
-          `<span>подсказки</span>` +
+          t(`<span>подсказки</span>`) +
         `</label>` +
       `</div>` +
       (l.sentence ? `<div class="desc">${esc(l.sentence)}</div>` : "") +
@@ -2818,7 +2836,7 @@ async function libSearch() {
   const q = $("#libQuery").value.trim();
   if (!q) return;
   const box = $("#libResults");
-  box.innerHTML = "<div class='lib-item desc'>поиск…</div>";
+  box.innerHTML = t("<div class='lib-item desc'>поиск…</div>");
   const r = await api("/api/lib/search", { q });
   _lastSearch = (r && r.results) || [];
   _lastSearchMeta = { ok: r && r.ok, needs_net: r && r.needs_net, log: (r && r.log) || "" };
@@ -2832,13 +2850,13 @@ function renderSearchResults() {
     // отличаем «нет каталога / нужен интернет» от «нет совпадений»
     if (_lastSearchMeta.needs_net || _lastSearchMeta.ok === false) {
       box.innerHTML =
-        `<div class="lib-item desc">Не удалось получить каталог библиотек.<br>` +
-        `Чтобы искать и устанавливать библиотеки, нужен <b>интернет</b> ` +
-        `(каталог скачивается один раз, дальше работает из кэша).` +
+        t(`<div class="lib-item desc">Не удалось получить каталог библиотек.<br>`) +
+        t(`Чтобы искать и устанавливать библиотеки, нужен <b>интернет</b> `) +
+        t(`(каталог скачивается один раз, дальше работает из кэша).`) +
         (_lastSearchMeta.log ? `<div class="lib-err-log">${esc(_lastSearchMeta.log)}</div>` : "") +
         `</div>`;
     } else {
-      box.innerHTML = "<div class='lib-item desc'>ничего не найдено</div>";
+      box.innerHTML = t("<div class='lib-item desc'>ничего не найдено</div>");
     }
     return;
   }
@@ -2848,13 +2866,13 @@ function renderSearchResults() {
     const d = document.createElement("div");
     d.className = "lib-item";
     const btns = !inst
-      ? `<button class="mini-btn" data-a="install">установить</button>`
-      : (updatable ? `<button class="mini-btn" data-a="update" title="Установлена v${esc(inst)}, доступна v${esc(l.version)}">обновить</button>` : "") +
-        `<button class="mini-btn danger" data-a="remove">удалить</button>`;
+      ? t(`<button class="mini-btn" data-a="install">установить</button>`)
+      : (updatable ? t("<button class=\"mini-btn\" data-a=\"update\" title=\"Установлена v%s, доступна v%s\">обновить</button>", esc(inst), esc(l.version)) : "") +
+        t(`<button class="mini-btn danger" data-a="remove">удалить</button>`);
     d.innerHTML = `
       <div class="row">
         <div class="name">${esc(l.name)} <span>v${esc(l.version)}</span>` +
-          (inst ? ` <span class="lib-chip">установлена v${esc(inst)}</span>` : "") +
+          (inst ? t(" <span class=\"lib-chip\">установлена v%s</span>", esc(inst)) : "") +
         `</div>
         <div class="lib-actions">${btns}</div>
       </div>
@@ -2869,12 +2887,12 @@ function renderSearchResults() {
       if (res && res.ok) {
         await loadInstalled();          // обновит _installedLibs и подсказки
         _examplesLoaded = false;        // меню «Примеры» перечитает список
-        setStatus(act === "remove" ? "библиотека удалена: " + l.name
-                : act === "update" ? "библиотека обновлена: " + l.name
-                :                    "библиотека установлена: " + l.name);
+        setStatus(act === "remove" ? t("библиотека удалена: ") + l.name
+                : act === "update" ? t("библиотека обновлена: ") + l.name
+                :                    t("библиотека установлена: ") + l.name);
         renderSearchResults();          // кнопки перерисуются по новому состоянию
       } else {
-        ev.target.textContent = "ошибка";
+        ev.target.textContent = t("ошибка");
         ev.target.title = (res && res.log) || "";
         d.querySelectorAll(".mini-btn").forEach(x => x.disabled = false);
       }
@@ -2897,10 +2915,10 @@ initLogScroll($("#serialLog"), $("#serialScrollBtn"));
 $("#consoleCopyBtn").addEventListener("click", function () {
   const text = $("#console").innerText;
   navigator.clipboard.writeText(text).then(() => {
-    this.textContent = "✓ Скопировано";
+    this.textContent = t("✓ Скопировано");
     this.classList.add("copied");
     setTimeout(() => {
-      this.textContent = "⎘ Копировать";
+      this.textContent = t("⎘ Копировать");
       this.classList.remove("copied");
     }, 1500);
   });
@@ -3168,7 +3186,7 @@ function replaceAllFn() {
     }
   });
   runSearch(q, false);
-  setStatus("заменено: " + n);
+  setStatus(t("заменено: ") + n);
 }
 $("#replaceToggle").addEventListener("click", () => {
   if ($("#replacePanel").classList.contains("open")) closeReplace();
@@ -3295,7 +3313,7 @@ function _scanBalance(src) {
   let openLine = 0, openCh = 0;             // где открылась незакрытая строка/символ/комментарий
   const stack = [];                          // { c, line, ch } для (){}[]
   const PAIR = { "}": "{", ")": "(", "]": "[" };
-  const NAME = { "{": 'фигурная скобка «}»', "(": 'круглая скобка «)»', "[": 'квадратная скобка «]»' };
+  const NAME = { "{": t('фигурная скобка «}»'), "(": t('круглая скобка «)»'), "[": t('квадратная скобка «]»') };
   const adv = () => { if (src[i] === "\n") { line++; ch = 0; } else ch++; i++; };
   while (i < n) {
     const c = src[i], c2 = src[i + 1];
@@ -3303,13 +3321,13 @@ function _scanBalance(src) {
     if (inBlock) { if (c === "*" && c2 === "/") { adv(); adv(); inBlock = false; } else adv(); continue; }
     if (inStr) {
       if (c === "\\") { adv(); adv(); continue; }            // экранирование (в т.ч. перенос строки «\»)
-      if (c === "\n") return { ok: false, reason: 'не закрыта кавычка «"»', line: openLine, ch: openCh };
+      if (c === "\n") return { ok: false, reason: t('не закрыта кавычка «"»'), line: openLine, ch: openCh };
       if (c === '"') inStr = false;
       adv(); continue;
     }
     if (inChar) {
       if (c === "\\") { adv(); adv(); continue; }
-      if (c === "\n") return { ok: false, reason: "не закрыт символ «'»", line: openLine, ch: openCh };
+      if (c === "\n") return { ok: false, reason: t("не закрыт символ «'»"), line: openLine, ch: openCh };
       if (c === "'") inChar = false;
       adv(); continue;
     }
@@ -3321,17 +3339,17 @@ function _scanBalance(src) {
     if (c === "}" || c === ")" || c === "]") {
       const open = stack.pop();
       if (!open || open.c !== PAIR[c])
-        return { ok: false, reason: "лишняя или несогласованная скобка «" + c + "»", line, ch };
+        return { ok: false, reason: t("лишняя или несогласованная скобка «") + c + "»", line, ch };
       adv(); continue;
     }
     adv();
   }
-  if (inBlock) return { ok: false, reason: "не закрыт комментарий «/*»", line: openLine, ch: openCh };
-  if (inStr)  return { ok: false, reason: 'не закрыта кавычка «"»', line: openLine, ch: openCh };
-  if (inChar) return { ok: false, reason: "не закрыт символ «'»", line: openLine, ch: openCh };
+  if (inBlock) return { ok: false, reason: t("не закрыт комментарий «/*»"), line: openLine, ch: openCh };
+  if (inStr)  return { ok: false, reason: t('не закрыта кавычка «"»'), line: openLine, ch: openCh };
+  if (inChar) return { ok: false, reason: t("не закрыт символ «'»"), line: openLine, ch: openCh };
   if (stack.length) {
     const o = stack[stack.length - 1];
-    return { ok: false, reason: "не закрыта " + NAME[o.c], line: o.line, ch: o.ch };
+    return { ok: false, reason: t("не закрыта ") + NAME[o.c], line: o.line, ch: o.ch };
   }
   return { ok: true };
 }
@@ -3343,7 +3361,7 @@ function formatCode() {
   if (!bal.ok) {
     cm.setCursor({ line: bal.line || 0, ch: bal.ch || 0 });
     cm.focus();
-    setStatus("⚠ Формат: " + bal.reason + " (строка " + ((bal.line || 0) + 1) + ") — сначала исправьте");
+    setStatus(t("⚠ Формат: ") + bal.reason + t(" (строка ") + ((bal.line || 0) + 1) + t(") — сначала исправьте"));
     return;
   }
   const scroll = cm.getScrollInfo();
@@ -3397,7 +3415,7 @@ function formatCode() {
   });
   cm.scrollTo(scroll.left, scroll.top);
   cm.setCursor(cursor);
-  setStatus("код отформатирован ✓");
+  setStatus(t("код отформатирован ✓"));
 }
 $("#formatBtn").addEventListener("click", formatCode);
 
@@ -3435,7 +3453,7 @@ const SIM_FILES = ["modules", "cpp", "interp", "robot", "world", "render", "api"
 function loadScript(src) {
   return new Promise((res, rej) => {
     const s = document.createElement("script");
-    s.src = src; s.onload = res; s.onerror = () => rej(new Error("не загрузился " + src));
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error(t("не загрузился ") + src));
     document.head.appendChild(s);
   });
 }
@@ -3447,7 +3465,7 @@ async function bootSimulator() {
   try {
     for (const f of SIM_FILES) await loadScript("/sim/" + f + ".js");
   } catch (e) {
-    console.warn("Симулятор не запущен:", e.message);
+    console.warn(t("Симулятор не запущен:"), e.message);
     return;
   }
   if (!window.Sim) return;
@@ -3464,13 +3482,13 @@ function initSim() {
   sim.onSerial = (t) => { if (typeof appendSerial === "function") appendSerial(t); };
   sim.onState = (st) => {
     const el = $("#simStatusLine");
-    if (st.err) { el.textContent = "Ошибка: " + st.err; el.classList.add("err"); return; }
+    if (st.err) { el.textContent = t("Ошибка: ") + st.err; el.classList.add("err"); return; }
     el.classList.remove("err");
-    el.textContent = (st.running ? "▶ выполняется" : st.phase === "done" ? "✓ завершено" : "остановлено")
-      + " · t=" + (st.clock / 1000).toFixed(1) + "с · сцена: " + scenName(st.scenario)
-      + (st.collided ? " · столкновение" : "");
+    el.textContent = (st.running ? t("▶ выполняется") : st.phase === "done" ? t("✓ завершено") : t("остановлено"))
+      + " · t=" + (st.clock / 1000).toFixed(1) + t("с · сцена: ") + scenName(st.scenario)
+      + (st.collided ? t(" · столкновение") : "");
   };
-  const scenName = (n) => ({ arena: "пусто", line: "линия", obstacles: "препятствия" }[n] || n);
+  const scenName = (n) => ({ arena: t("пусто"), line: t("линия"), obstacles: t("препятствия") }[n] || n);
   // правый край панели — точно у разделителя код|консоль; высота — как у main
   function positionSimPanel() {
     const main = document.querySelector("main"), side = document.querySelector(".side");
@@ -3485,7 +3503,7 @@ function initSim() {
     if (v) positionSimPanel();
     panel.classList.toggle("open", v);
     toggle.textContent = v ? "▶" : "◀";
-    toggle.title = v ? "Свернуть симулятор" : "Симулятор (2D)";
+    toggle.title = v ? t("Свернуть симулятор") : t("Симулятор (2D)");
     if (v) requestAnimationFrame(() => sim.resize());
   }
   /* --- ширина панели: тянем за ЛЕВЫЙ край (правый прижат к разделителю) --- */
@@ -3562,7 +3580,7 @@ function initSim() {
   $("#simRun").addEventListener("click", () => {
     const el = $("#simStatusLine");
     try { sim.load(editor.getValue()); }
-    catch (e) { el.textContent = "Ошибка разбора: " + (e.message || e); el.classList.add("err"); if (!open) setOpen(true); return; }
+    catch (e) { el.textContent = t("Ошибка разбора: ") + (e.message || e); el.classList.add("err"); if (!open) setOpen(true); return; }
     el.classList.remove("err");
     if (!open) setOpen(true);
     if (typeof switchPane === "function") switchPane("serial");   // вывод программы — в Serial
@@ -3587,14 +3605,14 @@ function initSim() {
   function floorRowHtml(i, id) {
     const m = SimModules.byId(id);
     return `<div class="rig-row" data-floor="${i}">
-      <button class="rig-arrow" data-act="prev" title="Предыдущий модуль">◀</button>
+      <button class="rig-arrow" data-act="prev" title="${t('Предыдущий модуль')}">◀</button>
       <div class="rig-art">
         <img src="${SimModules.ART.dev}" alt="${esc(m.name)}">
         <span class="rig-chip">${i + 2} · ${esc(m.name)}</span>
         ${marksHtml(id)}
       </div>
-      <button class="rig-arrow" data-act="next" title="Следующий модуль">▶</button>
-      <button class="rig-x" data-act="del" title="Убрать этаж">✕</button>
+      <button class="rig-arrow" data-act="next" title="${t('Следующий модуль')}">▶</button>
+      <button class="rig-x" data-act="del" title="${t('Убрать этаж')}">✕</button>
     </div>`;
   }
 
@@ -3616,13 +3634,13 @@ function initSim() {
     stack.innerHTML = sim.floors.map((id, i) => floorRowHtml(i, id)).reverse().join("") + baseRowHtml();
 
     const cfg = sim.getModule();
-    $("#cfgSummary").textContent = "UniBase" + (cfg.name === "Без модуля" ? "" : " + " + cfg.name);
+    $("#cfgSummary").textContent = "UniBase" + (cfg.name === t("Без модуля") ? "" : " + " + cfg.name);
     const parts = [];
-    sim.floors.forEach((id, i) => { const m = SimModules.byId(id); if (m.id !== "none") parts.push("этаж " + (i + 2) + ": " + m.desc); });
-    let desc = parts.length ? parts.join(" ") : "Только платформа UniBase: моторы N20 150 RPM, энкодеры, дисплей, батарея.";
+    sim.floors.forEach((id, i) => { const m = SimModules.byId(id); if (m.id !== "none") parts.push(t("этаж ") + (i + 2) + ": " + m.desc); });
+    let desc = parts.length ? parts.join(" ") : t("Только платформа UniBase: моторы N20 150 RPM, энкодеры, дисплей, батарея.");
     if (cfg.conflicts && cfg.conflicts.length) {
       const c = cfg.conflicts[0];
-      desc = `<span class="warn">⚠ Порт занят дважды: ${esc(c.a)} и ${esc(c.b)}. На реальном роботе так не подключить.</span> ` + desc;
+      desc = t("<span class=\"warn\">⚠ Порт занят дважды: %s и %s. На реальном роботе так не подключить.</span> ", esc(c.a), esc(c.b)) + desc;
     }
     $("#simModDesc").innerHTML = desc;
     $("#cfgAddFloor").disabled = n >= MAX_FLOORS;
