@@ -41,7 +41,7 @@ env:
   # Версии тулчейна — те же, что в Windows-установщике. Меняйте вместе с ним.
   UNI_CLI_VERSION: "1.5.1"
   UNI_ESP32_CORE: "3.3.10"
-  UNI_LIB_REF: "v1.1.0"
+  UNI_LIB_REF: "v1.2.1"
   TOOLCHAIN_CACHE: "v1"
   PYTHONUTF8: "1"
 
