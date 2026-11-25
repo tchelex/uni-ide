@@ -86,12 +86,11 @@ class App:
 
     def start(self, timeout=90):
         env = dict(os.environ)
-        env.update({
-            "UNI_HEADLESS": "1",
-            "UNI_PORT": str(self.port),
-            "UNI_STATE_DIR": self.state,
-            "HOME": self.home,
-        })
+        env.update({"UNI_HEADLESS": "1", "UNI_PORT": str(self.port)})
+        if os.name != "nt":
+            # каталог состояния уводим только там, где раскладка раздельная;
+            # на Windows всё лежит рядом с exe, и переменная сломала бы это
+            env.update({"UNI_STATE_DIR": self.state, "HOME": self.home})
         env.pop("UNI_UPDATE", None)
         self.proc = subprocess.Popen([self.exe], env=env)
         t0 = time.time()
@@ -139,11 +138,13 @@ def compiler_procs():
     """Сколько процессов компилятора ESP32 сейчас живо (для проверки «Стоп»)."""
     try:
         if os.name == "nt":
-            out = subprocess.run(["tasklist"], capture_output=True, text=True).stdout
+            raw = subprocess.run(["tasklist"], capture_output=True).stdout
         else:
-            out = subprocess.run(["ps", "-A", "-o", "comm="], capture_output=True, text=True).stdout
+            raw = subprocess.run(["ps", "-A", "-o", "comm="], capture_output=True).stdout
     except Exception:
         return -1
+    # вывод в кодировке консоли (на русской Windows — не UTF-8); имена процессов — ASCII
+    out = (raw or b"").decode("ascii", "replace")
     return len(re.findall(r"xtensa-esp|arduino-cli", out))
 
 

@@ -98,16 +98,19 @@ ISS_FILE  = os.path.join(HERE, "installer", "UNI-IDE.iss")
 LINUX_DIR = os.path.join(HERE, "installer", "linux")
 MAC_DIR   = os.path.join(HERE, "installer", "macos")
 
+# Загрузчик Linux-бандла (обёртка с авто-выбором графического режима, см. файл).
+LAUNCHER_SRC = os.path.join(LINUX_DIR, "UNI-IDE.sh")
+
 # Ресурсы приложения. server.py — тоже обычный файл: загрузчик (bootstrap.py)
 # запускает его с диска, что и делает возможными лёгкие payload-обновления
 # без переустановки.
-RES_FILES = ["server.py", "index.html", "icon.ico", "icon.png", "student-README.txt"]
+RES_FILES = ["server.py", "index.html", "i18n.js", "icon.ico", "icon.png", "student-README.txt"]
 # vendor — CodeMirror и шрифты; sim — модули 2D-симулятора; image — мнемосхемы
 # конструктора (UniBase/UniDev) для конфигуратора исполнителя.
 RES_DIRS  = ["vendor", "sim", "image"]
 
 # Состав payload-обновления (см. bootstrap.py и автоапдейт в server.py).
-PAYLOAD_FILES = ["server.py", "index.html", "icon.ico", "icon.png", "student-README.txt"]
+PAYLOAD_FILES = ["server.py", "index.html", "i18n.js", "icon.ico", "icon.png", "student-README.txt"]
 PAYLOAD_DIRS  = ["vendor", "sim", "image"]
 
 # Переносимый тулчейн (создаётся prepare_bundle.py).
@@ -238,6 +241,77 @@ def pyinstaller_build(install_deps=True):
     if not os.path.isdir(built):
         log("ОШИБКА: PyInstaller не создал " + built)
         sys.exit(1)
+
+
+# --------------------------------------------------------------------------- #
+# Linux: системный графический стек и загрузчик
+# --------------------------------------------------------------------------- #
+# PyInstaller складывает в _internal/ и системные библиотеки, от которых
+# зависят Qt6-колёса. Часть из них — это ДРАЙВЕРНЫЙ стек (libglvnd/Mesa/DRM):
+# бутлоадер ставит _internal первым в LD_LIBRARY_PATH, и собранные на
+# AlmaLinux 8 libdrm/libGL/libEGL затеняют более новые системные. На свежих
+# Mesa (radeonsi, iris) и проприетарном NVIDIA это ломает согласование
+# GLX/EGL — «Failed to finding matching FBConfig», «Could not initialize GLX»
+# и падение с SIGABRT (см. issue #2). На любом настольном Linux эти
+# библиотеки уже есть как часть видеодрайвера, поэтому из бандла их убираем:
+# линкер возьмёт системные копии. Чистим ТОЛЬКО корень _internal/ — Qt6 из
+# wheel PyQt6-Qt6 (PyQt6/Qt6/...) не трогаем.
+LINUX_GL_PRUNE = (
+    "libdrm",         # libdrm.so.2, libdrm_amdgpu/intel/nouveau/radeon…
+    "libgbm",         # Mesa GBM
+    "libglapi",       # диспетчер старой Mesa
+    "libxshmfence",   # хелпер libdrm/Mesa
+    "libGL.so",       # libglvnd…
+    "libGLX",
+    "libEGL.so",
+    "libGLdispatch",
+    "libOpenGL",
+    "libGLESv2",
+)
+
+
+def prune_linux_graphics_stack():
+    """Убирает собранный системный GL-стек из корня dist/UNI-IDE/_internal."""
+    internal = os.path.join(DIST_DIR, "_internal")
+    if not os.path.isdir(internal):
+        return
+    removed = []
+    for name in sorted(os.listdir(internal)):
+        path = os.path.join(internal, name)
+        if not (os.path.isfile(path) or os.path.islink(path)):
+            continue
+        if any(name.startswith(p) for p in LINUX_GL_PRUNE):
+            os.remove(path)
+            removed.append(name)
+    if removed:
+        log("Из бандла убран системный графический стек "
+            "(на целевой системе возьмутся драйверные копии): "
+            + ", ".join(removed))
+    else:
+        log("ВНИМАНИЕ: системный GL-стек в _internal не найден — "
+            "возможно, изменился состав колёс Qt6; проверьте бандл вручную.")
+
+
+def make_linux_launcher():
+    """Заменяет входной бинарь shell-обёрткой (installer/linux/UNI-IDE.sh):
+    настоящий бинарь переименовывается в UNI-IDE.bin, а под именем UNI-IDE
+    оказывается загрузчик с авто-выбором графического режима. Бутлоадер
+    PyInstaller считает пути от /proc/self/exe, поэтому переименование
+    безопасно, пока .bin лежит в той же папке."""
+    binary = os.path.join(DIST_DIR, APP_NAME)
+    real = os.path.join(DIST_DIR, APP_NAME + ".bin")
+    if not os.path.isfile(binary):
+        log("ОШИБКА: не найден входной бинарь " + binary)
+        sys.exit(1)
+    os.replace(binary, real)
+    os.chmod(real, 0o755)
+    with open(LAUNCHER_SRC, "rb") as f:
+        data = f.read().replace(b"\r\n", b"\n")   # скрипты — строго с LF
+    with open(binary, "wb") as f:
+        f.write(data)
+    os.chmod(binary, 0o755)
+    log("Загрузчик Linux (авто-выбор графического режима): "
+        + binary + " -> " + APP_NAME + ".bin")
 
 
 def _copytree(src, dest):
@@ -495,6 +569,9 @@ def main():
     keep_system_awake()
     ensure_toolchain()
     pyinstaller_build(install_deps=not args.no_pip)
+    if IS_LINUX:
+        prune_linux_graphics_stack()
+        make_linux_launcher()
     log("Копирую ресурсы и тулчейн в бандл...")
     root = copy_resources()
     if IS_MAC:

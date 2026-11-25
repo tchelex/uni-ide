@@ -481,7 +481,7 @@ def pick_file(open_mode, directory=None, save_filename=None):
         kwargs = {
             "directory": directory,
             "allow_multiple": False,
-            "file_types": ("Скетч Arduino (*.ino)", "Все файлы (*.*)"),
+            "file_types": (_t("Скетч Arduino (*.ino)"), _t("Все файлы (*.*)")),
         }
         if not open_mode and save_filename:
             kwargs["save_filename"] = save_filename
@@ -534,14 +534,14 @@ def run_cli(args, timeout=900, nice=False):
         )
         return p.returncode == 0, p.stdout or "", p.stderr or ""
     except FileNotFoundError:
-        return False, "", (
+        return False, "", _t(
             "arduino-cli не найден. В установленной программе он входит в комплект; "
             "в режиме разработки — должен быть в PATH. См. README."
         )
     except subprocess.TimeoutExpired:
-        return False, "", "Превышено время ожидания операции."
+        return False, "", _t("Превышено время ожидания операции.")
     except Exception as e:  # noqa: BLE001
-        return False, "", f"Ошибка запуска arduino-cli: {e}"
+        return False, "", _t("Ошибка запуска arduino-cli: {e}").format(e=e)
 
 
 def save_code(code, path=None):
@@ -570,7 +570,7 @@ class Monitor:
     def start(self, port, baud):
         self.stop()
         if not HAS_PYSERIAL:
-            raise RuntimeError("pyserial не установлен (pip install pyserial)")
+            raise RuntimeError(_t("pyserial не установлен (pip install pyserial)"))
         self.ser = serial.Serial(port, int(baud), timeout=0.2)
         self.port = port
         self.baud = baud
@@ -624,11 +624,68 @@ class Monitor:
 monitor = Monitor()
 
 # --------------------------------------------------------------------------- #
+# Локаль: сообщения API на языке интерфейса.
+# i18n.js выставляет cookie uni_lang (ru/en); интерфейсные строки обёрнуты в
+# _t() — при en подставляется английский текст, иначе исходный русский.
+# Ключ — русская строка (как msgid в gettext). Покрытие проверяет
+# tests/test_i18n.py.
+# --------------------------------------------------------------------------- #
+L10N_EN = {
+    "Скетч Arduino (*.ino)": "Arduino sketch (*.ino)",
+    "Все файлы (*.*)": "All files (*.*)",
+    "arduino-cli не найден. В установленной программе он входит в комплект; "
+    "в режиме разработки — должен быть в PATH. См. README.":
+        "arduino-cli not found. In the installed app it comes bundled; "
+        "in development mode it must be in PATH. See README.",
+    "Превышено время ожидания операции.": "Operation timed out.",
+    "Ошибка запуска arduino-cli: {e}": "Failed to start arduino-cli: {e}",
+    "pyserial не установлен (pip install pyserial)":
+        "pyserial is not installed (pip install pyserial)",
+    "Файл скетча не найден.": "Sketch file not found.",
+    "Не удалось открыть файл: {e}": "Failed to open file: {e}",
+    "Не удалось сохранить: {e}": "Failed to save: {e}",
+    "Недопустимый URL.": "Invalid URL.",
+    "Не выбран COM-порт.": "No COM port selected.",
+    "arduino-cli не найден.": "arduino-cli not found.",
+    "Не указан путь примера.": "No example path specified.",
+    "Пример не найден.": "Example not found.",
+    "Не удалось скопировать пример: {e}": "Failed to copy the example: {e}",
+    "Пустой запрос.": "Empty request.",
+    "Не удалось получить каталог библиотек.": "Failed to fetch the library catalog.",
+    "Не указано имя библиотеки.": "No library name specified.",
+    "Не выбран порт.": "No port selected.",
+    "подозрительный путь в архиве": "suspicious path in the archive",
+    "версия в архиве не совпадает": "version mismatch in the archive",
+}
+
+
+def _t(s):
+    """Перевод пользовательского сообщения на язык интерфейса (cookie uni_lang).
+    Вне контекста запроса (фоновые потоки, логи) всегда русский исходник.
+    Название не '_' — оно занято throwaway-переменной в распаковках run_cli."""
+    try:
+        if request.cookies.get("uni_lang") == "en":
+            return L10N_EN.get(s, s)
+    except Exception:
+        pass
+    return s
+
+
+# --------------------------------------------------------------------------- #
 # Маршруты — страница
 # --------------------------------------------------------------------------- #
 @app.route("/")
 def index():
     return send_from_directory(BASE, "index.html")
+
+
+@app.route("/i18n.js")
+def i18n_js():
+    """Словарь английской локали интерфейса (payload, обновляется с index.html)."""
+    p = os.path.join(BASE, "i18n.js")
+    if os.path.exists(p):
+        return send_from_directory(BASE, "i18n.js")
+    return ("", 404)
 
 
 @app.route("/vendor/<path:filename>")
@@ -723,12 +780,12 @@ def dialog_open():
         return jsonify({"ok": False, "cancelled": True})
     ino = resolve_sketch_path(picked)
     if not ino or not os.path.exists(ino):
-        return jsonify({"ok": False, "log": "Файл скетча не найден."})
+        return jsonify({"ok": False, "log": _t("Файл скетча не найден.")})
     try:
         with open(ino, "r", encoding="utf-8") as fh:
             code = fh.read()
     except Exception as e:  # noqa: BLE001
-        return jsonify({"ok": False, "log": f"Не удалось открыть файл: {e}"})
+        return jsonify({"ok": False, "log": _t("Не удалось открыть файл: {e}").format(e=e)})
     add_recent(ino)
     return jsonify({"ok": True, "path": ino, "name": sketch_name_of(ino), "code": code})
 
@@ -760,7 +817,7 @@ def dialog_saveas():
         with open(ino, "w", encoding="utf-8") as fh:
             fh.write(code)
     except Exception as e:  # noqa: BLE001
-        return jsonify({"ok": False, "log": f"Не удалось сохранить: {e}"})
+        return jsonify({"ok": False, "log": _t("Не удалось сохранить: {e}").format(e=e)})
     add_recent(ino)
     return jsonify({"ok": True, "path": ino, "name": name})
 
@@ -809,7 +866,7 @@ def open_external():
     """Открывает внешнюю http(s)-ссылку в системном браузере."""
     url = ((request.json or {}).get("url", "") or "").strip()
     if not (url.startswith("http://") or url.startswith("https://")):
-        return jsonify({"ok": False, "log": "Недопустимый URL."})
+        return jsonify({"ok": False, "log": _t("Недопустимый URL.")})
     try:
         open_browser(url)
         return jsonify({"ok": True})
@@ -1035,7 +1092,7 @@ def upload_sketch():
     body = request.json or {}
     port = body.get("port")
     if not port:
-        return jsonify({"ok": False, "log": "Не выбран COM-порт."})
+        return jsonify({"ok": False, "log": _t("Не выбран COM-порт.")})
 
     ino = save_code(body.get("code", ""), body.get("path"))
     d = os.path.dirname(ino)
@@ -1155,7 +1212,7 @@ def _stream_cli(args, bp=None, on_stop=None):
             **_popen_extra(),
         )
     except FileNotFoundError:
-        yield "data: " + _json.dumps({"line": "arduino-cli не найден.", "done": True, "ok": False}) + "\n\n"
+        yield "data: " + _json.dumps({"line": _t("arduino-cli не найден."), "done": True, "ok": False}) + "\n\n"
         return
 
     if bp is not None:
@@ -1229,7 +1286,7 @@ def upload_stream():
     if not port:
         def _err():
             import json as _j
-            yield "data: " + _j.dumps({"line": "Не выбран COM-порт.", "done": True, "ok": False}) + "\n\n"
+            yield "data: " + _j.dumps({"line": _t("Не выбран COM-порт."), "done": True, "ok": False}) + "\n\n"
         return Response(stream_with_context(_err()), mimetype="text/event-stream")
 
     ino = resolve_sketch_path(request.args.get("path")) or ensure_default_sketch()
@@ -1552,12 +1609,12 @@ def example_open():
     body = request.json or {}
     src = (body.get("path") or "").strip()
     if not src:
-        return jsonify({"ok": False, "log": "Не указан путь примера."})
+        return jsonify({"ok": False, "log": _t("Не указан путь примера.")})
     src = os.path.abspath(src)
     src_dir = src if os.path.isdir(src) else os.path.dirname(src)
     src_ino = resolve_sketch_path(src_dir)
     if not src_ino or not os.path.exists(src_ino):
-        return jsonify({"ok": False, "log": "Пример не найден."})
+        return jsonify({"ok": False, "log": _t("Пример не найден.")})
 
     base = safe_sketch_name(sketch_name_of(src_ino)) or "example"
     os.makedirs(SKETCHBOOK, exist_ok=True)
@@ -1578,7 +1635,7 @@ def example_open():
             code = fh.read()
     except Exception as e:  # noqa: BLE001
         shutil.rmtree(dst_dir, ignore_errors=True)
-        return jsonify({"ok": False, "log": f"Не удалось скопировать пример: {e}"})
+        return jsonify({"ok": False, "log": _t("Не удалось скопировать пример: {e}").format(e=e)})
 
     add_recent(dst_ino)
     return jsonify({"ok": True, "path": dst_ino, "name": name, "code": code})
@@ -1605,7 +1662,7 @@ def _parse_lib_search(out):
 def libs_search():
     q = (request.json or {}).get("q", "").strip()
     if not q:
-        return jsonify({"ok": False, "results": [], "log": "Пустой запрос."})
+        return jsonify({"ok": False, "results": [], "log": _t("Пустой запрос.")})
 
     ok, out, err = run_cli(["lib", "search", q, "--format", "json"])
     results = _parse_lib_search(out) if ok else []
@@ -1623,7 +1680,7 @@ def libs_search():
 
     log = (err or "").strip()
     if not ok and not log:
-        log = "Не удалось получить каталог библиотек."
+        log = _t("Не удалось получить каталог библиотек.")
     # подсказка для UI: проблема именно с каталогом/сетью, а не «нет совпадений»
     needs_net = (not ok) or (index_missing and not results)
     return jsonify({"ok": ok, "results": results, "log": log, "needs_net": needs_net})
@@ -1635,7 +1692,7 @@ def libs_install():
     (этим же маршрутом работает кнопка «обновить»)."""
     name = (request.json or {}).get("name", "").strip()
     if not name:
-        return jsonify({"ok": False, "log": "Не указано имя библиотеки."})
+        return jsonify({"ok": False, "log": _t("Не указано имя библиотеки.")})
     ok, out, err = run_cli(["lib", "install", name])
     if ok:
         # примеры новой библиотеки должны сразу появиться в меню «Примеры»
@@ -1649,7 +1706,7 @@ def libs_uninstall():
     встроенные в ядро ESP32 удалить нельзя — arduino-cli вернёт ошибку)."""
     name = (request.json or {}).get("name", "").strip()
     if not name:
-        return jsonify({"ok": False, "log": "Не указано имя библиотеки."})
+        return jsonify({"ok": False, "log": _t("Не указано имя библиотеки.")})
     ok, out, err = run_cli(["lib", "uninstall", name])
     if ok:
         _EXAMPLES_CACHE["libs"] = None
@@ -1718,7 +1775,7 @@ def mon_start():
     port = body.get("port")
     baud = body.get("baud", 115200)
     if not port:
-        return jsonify({"ok": False, "log": "Не выбран порт."})
+        return jsonify({"ok": False, "log": _t("Не выбран порт.")})
     try:
         monitor.start(port, baud)
         return jsonify({"ok": True})
@@ -1861,7 +1918,7 @@ def stage_payload_zip(zip_path, expect_version=None):
             for n in names:
                 p = os.path.normpath(n)
                 if p.startswith("..") or os.path.isabs(p):
-                    return False, "подозрительный путь в архиве"
+                    return False, _t("подозрительный путь в архиве")
             z.extractall(tmp)
         meta_path = os.path.join(tmp, "update.json")
         with open(meta_path, encoding="utf-8") as f:
@@ -1869,7 +1926,7 @@ def stage_payload_zip(zip_path, expect_version=None):
         ver = meta.get("version") or ""
         min_base = meta.get("min_base") or "0.0.0"
         if expect_version and ver != expect_version:
-            return False, "версия в архиве не совпадает"
+            return False, _t("версия в архиве не совпадает")
         if ver_newer(min_base, BASE_VERSION):
             # payload требует более новый загрузчик — нужен полный установщик
             shutil.rmtree(tmp, ignore_errors=True)

@@ -13,7 +13,12 @@
 # ============================================================================
 set -euo pipefail
 
-echo "==> Системные библиотеки (их подхватит PyInstaller и положит в бандл)"
+echo "==> Системные библиотеки (для анализа зависимостей PyInstaller)"
+# Важно: mesa-libGL/libdrm/libgbm нужны здесь только чтобы PyInstaller
+# корректно разрешил зависимости Qt6. В готовый бандл они НЕ попадают —
+# build.py (prune_linux_graphics_stack) вычищает драйверный стек из
+# _internal: иначе собранные на AlmaLinux 8 libdrm/libGL/libEGL затеняют
+# более новые системные и ломают запуск на свежих Mesa (issue #2).
 dnf -y -q install epel-release >/dev/null
 dnf -y -q install \
     binutils tar xz findutils which \

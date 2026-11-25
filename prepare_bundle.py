@@ -18,7 +18,7 @@ prepare_bundle.py — ШАГ ДЛЯ УЧИТЕЛЯ/СБОРЩИКА, ВЫПОЛ�
 Версии можно закрепить переменными окружения (иначе берутся последние):
     UNI_CLI_VERSION=1.5.1      версия arduino-cli
     UNI_ESP32_CORE=3.3.10      версия ядра esp32:esp32
-    UNI_LIB_REF=v1.1.0         тег/ветка библиотеки UNI (для --libs)
+    UNI_LIB_REF=v1.2.1         тег/ветка библиотеки UNI (для --libs)
 """
 
 import os
@@ -45,7 +45,7 @@ ESP32_URL = "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/
 
 CLI_VERSION = os.environ.get("UNI_CLI_VERSION", "").strip() or "latest"
 ESP32_CORE  = os.environ.get("UNI_ESP32_CORE", "").strip()
-UNI_LIB_URL = "https://github.com/fadeev-iliya/UNI.git"
+UNI_LIB_URL = "https://github.com/uni-robotics/UNI.git"
 UNI_LIB_REF = os.environ.get("UNI_LIB_REF", "").strip()
 
 # При желании впишите библиотеки, которые нужны на занятиях (ставятся всегда):
