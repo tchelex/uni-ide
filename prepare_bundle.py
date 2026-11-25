@@ -183,7 +183,7 @@ def install_bundle_libs():
 # То, что build.py всё равно не кладёт в бандл (см. COPY_IGNORE там): IDE
 # нацелена только на классический ESP32 (Xtensa). Список должен совпадать.
 PRUNE_NAMES = {
-    "espressif__esp_matter",
+    "espressif__esp_matter", "esp_matter",
     "esp-rv32", "riscv32-esp-elf-gdb",
     "esp32c3-libs", "esp32c5-libs", "esp32c6-libs", "esp32h2-libs",
     "esp32p4-libs", "esp32p4_es-libs", "esp32s2-libs", "esp32s3-libs",

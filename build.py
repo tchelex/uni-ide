@@ -124,7 +124,9 @@ TOOLCHAIN_DIRS  = ["arduino-data", "arduino-user"]
 COPY_IGNORE = shutil.ignore_patterns(
     # SDK протокола Matter («умный дом»): не нужен и создаёт пути >260 символов,
     # из-за чего падают упаковка Inno Setup и установка без long-path поддержки.
-    "espressif__esp_matter",
+    # "esp_matter" — заголовки include/esp_matter внутри esp32-libs/esp32s31-libs
+    # (именно они ломали установку 1.5.1: MoveFile, код 3).
+    "espressif__esp_matter", "esp_matter",
     # RISC-V компилятор и отладчик — для Xtensa-ESP32 не используются.
     "esp-rv32", "riscv32-esp-elf-gdb",
     # precompiled-библиотеки других вариантов чипов (нужен только esp32-libs).
