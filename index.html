@@ -1305,6 +1305,8 @@
   </div>
   <div class="spacer"></div>
 
+  <button class="btn ghost" id="langToggle" title="Язык интерфейса"
+          style="min-width:44px;font-weight:700;letter-spacing:.5px">RU</button>
   <div class="spin" id="spin"></div>
   <select id="portSel" title="COM-порт"><option>порты…</option></select>
   <button class="btn icon ghost" id="refreshBtn" title="Обновить порты">
@@ -1343,12 +1345,6 @@
         <span id="fontSizeLabel">14</span>
         <button id="fontInc" title="Увеличить">+</button>
       </div>
-      <div class="toolbar-sep"></div>
-      <label>Язык:</label>
-      <select id="langSelect">
-        <option value="ru">Русский</option>
-        <option value="en">English</option>
-      </select>
       <div class="toolbar-sep"></div>
       <button class="fmt-btn" id="formatBtn" title="Форматировать код: отступы и пробелы">
         <svg viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="13" y2="12"/><line x1="4" y1="18" x2="17" y2="18"/></svg>Format
@@ -1553,10 +1549,11 @@ const $ = (s) => document.querySelector(s);
    языка. Динамические строки переводятся через t() в местах создания. */
 if (window.UNI_I18N) {
   UNI_I18N.applyI18n(document.body);
-  const _langSel = document.getElementById("langSelect");
-  if (_langSel) {
-    _langSel.value = UNI_I18N.getLang();
-    _langSel.addEventListener("change", () => UNI_I18N.setLang(_langSel.value));
+  const _langBtn = document.getElementById("langToggle");
+  if (_langBtn) {
+    _langBtn.textContent = UNI_I18N.getLang().toUpperCase();
+    _langBtn.addEventListener("click", () =>
+      UNI_I18N.setLang(UNI_I18N.getLang() === "ru" ? "en" : "ru"));
   }
 }
 // Сбой сети/сервера не должен сыпать uncaught-исключения из фоновых опросов
