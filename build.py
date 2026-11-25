@@ -430,6 +430,28 @@ def find_iscc():
     return None
 
 
+def _subst_mount(path):
+    """Монтирует папку как свободную букву диска (subst) — обход MAX_PATH.
+
+    В тулчейне ESP32 есть файлы с относительными путями ~200+ символов
+    (include/mbedtls/tf-psa-crypto/…): в глубоко лежащей папке проекта полный
+    путь переваливает за 260, и ISCC падает с «Системе не удается найти
+    указанный путь». Через букву диска путь короткий. Сопоставление живёт
+    до перезагрузки или _subst_unmount. Возвращает "Z:" или None."""
+    for letter in "ZYXWVUTSRQPON":
+        drive = letter + ":"
+        if not os.path.exists(drive + "\\"):
+            r = subprocess.run(["subst", drive, path], capture_output=True)
+            if r.returncode == 0:
+                return drive
+    return None
+
+
+def _subst_unmount(drive):
+    if drive:
+        subprocess.run(["subst", drive, "/D"], capture_output=True)
+
+
 def build_installer_windows():
     """Собирает setup.exe через Inno Setup."""
     iscc = find_iscc()
@@ -442,12 +464,26 @@ def build_installer_windows():
         sys.exit(2)
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    run([iscc,
-         "/DAppVersion=" + VERSION,
-         "/DSourceDir=" + DIST_DIR,
-         "/DRepoDir="  + HERE,
-         "/O" + OUT_DIR,
-         ISS_FILE])
+
+    # ISCC не long-path aware: на глубоко лежащем проекте пути тулчейна
+    # (>260 символов) роняют упаковку. Монтируем dist/ буквой диска.
+    drive = _subst_mount(DIST_ROOT)
+    if drive:
+        log("dist/ смонтирован как " + drive + " (обход MAX_PATH для ISCC)")
+        src_dir = drive + "\\" + APP_NAME
+    else:
+        log("ВНИМАНИЕ: нет свободной буквы диска для subst — "
+            "на длинных путях ISCC может упасть.")
+        src_dir = DIST_DIR
+    try:
+        run([iscc,
+             "/DAppVersion=" + VERSION,
+             "/DSourceDir=" + src_dir,
+             "/DRepoDir="  + HERE,
+             "/O" + OUT_DIR,
+             ISS_FILE])
+    finally:
+        _subst_unmount(drive)
 
     setup = os.path.join(OUT_DIR, "UNI-IDE-Setup-" + VERSION + ".exe")
     log("ГОТОВО. Установщик: " + setup)
